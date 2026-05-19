@@ -152,6 +152,7 @@ class Position extends AggregateRoot {
     this.quantity = 0;
     this.currentPrice = closePrice;
 
+    const marginReleased = this.marginUsed;
     this.marginUsed = 0;
 
     this.raiseEvent(new DomainEvent(
@@ -161,7 +162,7 @@ class Position extends AggregateRoot {
         closePrice,
         realizedPnL: this.realizedPnL,
         totalPnL: this.realizedPnL + this.unrealizedPnL,
-        marginUsed: this.marginUsed,
+        marginUsed: marginReleased,
       }
     ));
   }
