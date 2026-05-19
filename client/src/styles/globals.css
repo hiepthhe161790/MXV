@@ -32,7 +32,6 @@ body {
   background: #64748b;
 }
 
-/* Animations */
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -53,12 +52,28 @@ body {
   }
 }
 
+@keyframes scan {
+  0% {
+    top: 4%;
+  }
+  50% {
+    top: 96%;
+  }
+  100% {
+    top: 4%;
+  }
+}
+
 .animate-fadeIn {
   animation: fadeIn 0.3s ease-in;
 }
 
 .animate-slideInUp {
   animation: slideInUp 0.3s ease-in;
+}
+
+.animate-scan {
+  animation: scan 3s ease-in-out infinite;
 }
 
 /* Utilities */

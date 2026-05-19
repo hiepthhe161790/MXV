@@ -529,6 +529,77 @@ export default function PhuQuyPage() {
 
         </div>
       </div>
+
+      {/* Interactive QR Zoom Modal */}
+      {zoomQR && qrResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 animate-fadeIn">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl p-6 max-w-sm w-full relative shadow-2xl animate-slideInUp">
+            {/* Close button */}
+            <button
+              onClick={() => setZoomQR(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-800 p-1.5 rounded-full transition-all border border-slate-700"
+            >
+              <X size={16} />
+            </button>
+
+            {/* Modal content */}
+            <div className="flex flex-col items-center text-center">
+              <div className="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center mb-3">
+                <QrCode size={24} className="text-amber-400" />
+              </div>
+              <h3 className="text-lg font-bold text-white uppercase tracking-wide">Quét mã sản phẩm</h3>
+              <p className="text-xs text-slate-400 mt-1 mb-5">
+                Dùng camera điện thoại hoặc ứng dụng quét để kiểm định nhanh trên Portal Phú Quý
+              </p>
+
+              {/* QR display frame with glow */}
+              <div className="p-4 bg-white rounded-2xl shadow-[0_0_25px_rgba(245,158,11,0.25)] border border-amber-500/20 mb-5 relative overflow-hidden group">
+                <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-amber-400 to-transparent animate-scan shadow-[0_0_8px_rgba(245,158,11,0.8)] pointer-events-none" />
+                <img 
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrResult.QrCode)}&color=0f172a&bgcolor=ffffff`}
+                  alt="Product QR Zoomed"
+                  className="w-56 h-56 object-contain rounded-lg"
+                />
+              </div>
+
+              {/* Specs info */}
+              <div className="w-full bg-slate-800/60 rounded-xl p-3 border border-slate-700 text-left space-y-2 mb-5">
+                <div className="flex justify-between text-xs border-b border-slate-700/50 pb-1.5">
+                  <span className="text-slate-400">Tên:</span>
+                  <span className="font-bold text-white truncate max-w-[180px]">{qrResult.TenSanPham}</span>
+                </div>
+                <div className="flex justify-between text-xs border-b border-slate-700/50 pb-1.5">
+                  <span className="text-slate-400">Serial:</span>
+                  <span className="font-semibold text-amber-300 font-mono">{qrResult.Serial}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-400">Mã QR:</span>
+                  <span className="font-semibold text-white font-mono text-[10px]">{qrResult.QrCode}</span>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-3 w-full">
+                <a
+                  href={`https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodeURIComponent(qrResult.QrCode)}&color=000000&bgcolor=ffffff`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-amber-600/20 active:scale-95 transition-all"
+                >
+                  <Download size={16} />
+                  <span>Tải ảnh HD</span>
+                </a>
+                <button
+                  onClick={() => setZoomQR(false)}
+                  className="flex-1 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-sm font-medium border border-slate-700 transition-all active:scale-95"
+                >
+                  Đóng
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
