@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { BarChart3, TrendingUp, Wallet, History, LogOut, Shield, ScrollText, BarChart2 } from 'lucide-react';
+import { BarChart3, TrendingUp, Wallet, History, LogOut, Shield, ScrollText, BarChart2, Coins } from 'lucide-react';
 import { useAuthStore, useTradingStore } from '@/context/store';
 
 const menuItems = [
@@ -10,7 +10,9 @@ const menuItems = [
   { icon: History,    label: 'Giao dịch',     path: '/transactions' },
   { icon: Shield,     label: 'Risk Monitor',  path: '/risk' },
   { icon: ScrollText, label: 'Audit Log',     path: '/audit' },
+  { icon: Coins,      label: 'Portal Phú Quý', path: '/phuquy' },
 ];
+
 
 export default function Sidebar() {
   const location = useLocation();

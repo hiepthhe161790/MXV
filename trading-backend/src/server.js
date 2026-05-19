@@ -37,6 +37,8 @@ const createAccountRoutes = require('./api/accountRoutes');
 const { TransactionModel, AuditModel, logAudit } = require('./api/accountRoutes');
 const createOrderRoutes = require('./api/orderRoutes');
 const createPositionRoutes = require('./api/positionRoutes');
+const createPhuQuyRoutes = require('./api/phuQuyRoutes');
+
 
 const app = express();
 const eventBusEnabled = process.env.ENABLE_RABBITMQ !== 'false';
@@ -185,6 +187,9 @@ async function setupRoutes() {
 
   // Position routes
   app.use('/api/positions', createPositionRoutes(services.positionService));
+
+  // PhuQuy integration gateway routes
+  app.use('/api/phuquy', createPhuQuyRoutes());
 
   // Transaction routes (wrapper around account operations)
   app.post('/api/transactions/deposit', async (req, res, next) => {

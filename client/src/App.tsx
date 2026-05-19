@@ -16,6 +16,7 @@ import PositionsPage from '@/pages/PositionsPage';
 import TransactionsPage from '@/pages/TransactionsPage';
 import RiskMonitorPage from '@/pages/RiskMonitorPage';
 import AuditLogPage from '@/pages/AuditLogPage';
+import PhuQuyPage from '@/pages/PhuQuyPage';
 import { useEffect } from 'react';
 import { useAuthStore } from '@/context/store';
 import { authService } from '@/services/authService';
@@ -52,7 +53,9 @@ export default function App() {
             <Route path="/transactions" element={<ProtectedRoute><TransactionsPage /></ProtectedRoute>} />
             <Route path="/risk"         element={<ProtectedRoute><RiskMonitorPage /></ProtectedRoute>} />
             <Route path="/audit"        element={<ProtectedRoute><AuditLogPage /></ProtectedRoute>} />
+            <Route path="/phuquy"       element={<ProtectedRoute><PhuQuyPage /></ProtectedRoute>} />
           </Route>
+
 
           {/* Redirects */}
           <Route path="/"  element={<Navigate to="/dashboard" replace />} />
