@@ -20,7 +20,11 @@ export default function OrdersPage() {
           return;
         }
         const response = await tradingService.getOrders(accountId);
-        const orderData = response || [];
+        const orderData = (response || []).map((o: any) => ({
+          ...o,
+          status: o.state || o.status || 'PENDING',
+          executedPrice: o.averagePrice && o.averagePrice > 0 ? o.averagePrice : (o.limitPrice || o.executedPrice)
+        }));
         setOrders(orderData);
         store.setOrders(orderData);
       } catch (error) {
@@ -51,8 +55,13 @@ export default function OrdersPage() {
       case 'FILLED':
         return <CheckCircle size={18} className="text-green-400" />;
       case 'PENDING':
+      case 'SENT':
+      case 'PARTIALLY_FILLED':
+      case 'NEW':
+      case 'VALIDATED':
         return <Clock size={18} className="text-yellow-400" />;
       case 'CANCELLED':
+      case 'REJECTED':
         return <XCircle size={18} className="text-red-400" />;
       default:
         return <Clock size={18} className="text-slate-400" />;
@@ -64,8 +73,13 @@ export default function OrdersPage() {
       case 'FILLED':
         return 'text-green-400';
       case 'PENDING':
+      case 'SENT':
+      case 'PARTIALLY_FILLED':
+      case 'NEW':
+      case 'VALIDATED':
         return 'text-yellow-400';
       case 'CANCELLED':
+      case 'REJECTED':
         return 'text-red-400';
       default:
         return 'text-slate-400';
@@ -74,6 +88,12 @@ export default function OrdersPage() {
 
   const filteredOrders = orders.filter((order) => {
     if (filter === 'ALL') return true;
+    if (filter === 'PENDING') {
+      return ['PENDING', 'SENT', 'PARTIALLY_FILLED', 'NEW', 'VALIDATED'].includes(order.status);
+    }
+    if (filter === 'CANCELLED') {
+      return ['CANCELLED', 'REJECTED'].includes(order.status);
+    }
     return order.status === filter;
   });
 
@@ -154,19 +174,23 @@ export default function OrdersPage() {
                   <td>
                     <div className={`flex items-center space-x-2 ${getStatusColor(order.status)}`}>
                       {getStatusIcon(order.status)}
-                      <span className="text-sm">{order.status}</span>
+                      <span className="text-sm font-semibold">{order.status}</span>
                     </div>
                   </td>
                   <td>{order.filledQuantity}</td>
-                  <td>${order.executedPrice?.toFixed(2) || '-'}</td>
+                  <td>
+                    {order.executedPrice && order.executedPrice > 0 
+                      ? `$${order.executedPrice.toFixed(2)}` 
+                      : '$-'}
+                  </td>
                   <td className="text-xs text-slate-400">
                     {new Date(order.createdAt).toLocaleString()}
                   </td>
                   <td>
-                    {order.status === 'PENDING' && (
+                    {['PENDING', 'SENT', 'PARTIALLY_FILLED', 'NEW', 'VALIDATED'].includes(order.status) && (
                       <button
                         onClick={() => handleCancelOrder(order._id)}
-                        className="text-xs text-red-400 hover:text-red-300"
+                        className="text-xs text-red-400 hover:text-red-300 hover:underline transition-all"
                       >
                         Cancel
                       </button>

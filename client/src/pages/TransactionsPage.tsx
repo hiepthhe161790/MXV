@@ -277,7 +277,7 @@ export default function TransactionsPage() {
         <div className="space-y-4">
           {/* Filter */}
           <div className="flex space-x-2">
-            {['ALL', 'DEPOSIT', 'WITHDRAWAL'].map(f => (
+            {['ALL', 'DEPOSIT', 'WITHDRAWAL', 'REALIZED_PNL'].map(f => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}
@@ -285,7 +285,13 @@ export default function TransactionsPage() {
                   filter === f ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:text-white'
                 }`}
               >
-                {f === 'ALL' ? 'Tất cả' : f === 'DEPOSIT' ? 'Nộp tiền' : 'Rút tiền'}
+                {f === 'ALL' 
+                  ? 'Tất cả' 
+                  : f === 'DEPOSIT' 
+                    ? 'Nộp tiền' 
+                    : f === 'WITHDRAWAL'
+                      ? 'Rút tiền'
+                      : 'Khớp lệnh (PnL)'}
               </button>
             ))}
             <span className="ml-auto text-slate-400 text-sm self-center">
@@ -314,37 +320,53 @@ export default function TransactionsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredTxns.map(txn => (
-                    <tr key={txn._id}>
-                      <td className="font-mono text-xs text-slate-300">{txn.transactionId}</td>
-                      <td>
-                        <div className={`flex items-center space-x-2 ${
-                          txn.type === 'DEPOSIT' ? 'text-green-400' : 'text-red-400'
-                        }`}>
-                          {txn.type === 'DEPOSIT'
-                            ? <ArrowDownLeft size={14} />
-                            : <ArrowUpRight size={14} />
-                          }
-                          <span className="text-xs font-semibold">
-                            {txn.type === 'DEPOSIT' ? 'Nộp tiền' : 'Rút tiền'}
+                  {filteredTxns.map(txn => {
+                    const isDeposit = txn.type === 'DEPOSIT';
+                    const isWithdrawal = txn.type === 'WITHDRAWAL';
+                    const isRealizedPnL = txn.type === 'REALIZED_PNL';
+                    const isProfit = isDeposit || (isRealizedPnL && txn.balanceAfter >= txn.balanceBefore);
+                    
+                    const colorClass = isProfit ? 'text-green-400' : 'text-red-400';
+                    const amountSign = isProfit ? '+' : '-';
+                    const Icon = isProfit ? ArrowDownLeft : ArrowUpRight;
+                    
+                    const typeLabel = isDeposit 
+                      ? 'Nộp tiền' 
+                      : isWithdrawal 
+                        ? 'Rút tiền' 
+                        : (txn.balanceAfter >= txn.balanceBefore ? 'Lợi nhuận' : 'Thua lỗ');
+
+                    return (
+                      <tr key={txn._id} title={txn.reason}>
+                        <td className="font-mono text-xs text-slate-300" title={txn.transactionId}>
+                          {txn.transactionId}
+                        </td>
+                        <td>
+                          <div className={`flex items-center space-x-2 ${colorClass}`}>
+                            <Icon size={14} />
+                            <span className="text-xs font-semibold">{typeLabel}</span>
+                          </div>
+                        </td>
+                        <td className={`font-bold ${colorClass}`}>
+                          {amountSign}${ (txn.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
+                        </td>
+                        <td className="text-slate-400">
+                          ${ (txn.balanceBefore || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
+                        </td>
+                        <td className="text-white font-semibold">
+                          ${ (txn.balanceAfter || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
+                        </td>
+                        <td>
+                          <span className="px-2 py-0.5 rounded text-xs font-semibold bg-green-600/20 text-green-400">
+                            {txn.status || 'COMPLETED'}
                           </span>
-                        </div>
-                      </td>
-                      <td className={`font-bold ${txn.type === 'DEPOSIT' ? 'text-green-400' : 'text-red-400'}`}>
-                        {txn.type === 'DEPOSIT' ? '+' : '-'}${(txn.amount || 0).toLocaleString()}
-                      </td>
-                      <td className="text-slate-400">${(txn.balanceBefore || 0).toLocaleString()}</td>
-                      <td className="text-white font-semibold">${(txn.balanceAfter || 0).toLocaleString()}</td>
-                      <td>
-                        <span className="px-2 py-0.5 rounded text-xs font-semibold bg-green-600/20 text-green-400">
-                          {txn.status || 'COMPLETED'}
-                        </span>
-                      </td>
-                      <td className="text-xs text-slate-400">
-                        {new Date(txn.createdAt).toLocaleString('vi-VN')}
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="text-xs text-slate-400">
+                          {new Date(txn.createdAt).toLocaleString('vi-VN')}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

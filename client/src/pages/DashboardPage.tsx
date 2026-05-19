@@ -57,9 +57,11 @@ export default function DashboardPage() {
 
         // Map orders
         (ords || []).forEach((o: any) => {
+          const status = o.state || o.status || 'PENDING';
+          const price = o.averagePrice && o.averagePrice > 0 ? o.averagePrice : (o.limitPrice || o.executedPrice || 0);
           items.push({
-            type: `ORDER_${o.status}`,
-            message: `Khớp lệnh ${o.side} ${o.quantity} ${o.symbol} tại $${(o.executedPrice || o.limitPrice || 0).toLocaleString()} (${o.orderType})`,
+            type: `ORDER_${status}`,
+            message: `Khớp lệnh ${o.side} ${o.quantity} ${o.symbol} tại $${price.toLocaleString()} (${o.orderType})`,
             time: new Date(o.createdAt).toLocaleTimeString(),
             rawTime: new Date(o.createdAt).getTime(),
           });

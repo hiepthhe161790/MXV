@@ -18,9 +18,11 @@ export interface Order {
   side: string;
   quantity: number;
   orderType: string;
-  status: string;
+  status?: string;
+  state?: string;
   filledQuantity: number;
   executedPrice?: number;
+  averagePrice?: number;
   createdAt: string;
 }
 

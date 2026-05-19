@@ -207,7 +207,29 @@ async function setupRoutes() {
       if (!accountId || !amount) {
         return res.status(400).json({ error: 'accountId and amount required' });
       }
-      const result = await services.accountService.deposit(accountId, amount, reason || 'Deposit');
+      if (Number(amount) <= 0) {
+        return res.status(400).json({ error: 'Amount must be positive' });
+      }
+
+      const before = await services.accountService.getAccount(accountId);
+      const balanceBefore = before?.balance || 0;
+
+      const result = await services.accountService.deposit(accountId, Number(amount), reason || 'Deposit');
+
+      // Log transaction
+      const { v4: uuidv4 } = require('uuid');
+      await TransactionModel.create({
+        transactionId: 'TXN-' + uuidv4().slice(0, 8).toUpperCase(),
+        accountId,
+        type: 'DEPOSIT',
+        amount: Number(amount),
+        balanceBefore,
+        balanceAfter: balanceBefore + Number(amount),
+        reason: reason || 'Deposit',
+        status: 'COMPLETED',
+      });
+
+      await logAudit(accountId, 'DEPOSIT', `Deposit $${amount}`, { amount });
       res.json(result);
     } catch (error) {
       next(error);
@@ -220,7 +242,29 @@ async function setupRoutes() {
       if (!accountId || !amount) {
         return res.status(400).json({ error: 'accountId and amount required' });
       }
-      const result = await services.accountService.withdraw(accountId, amount, reason || 'Withdrawal');
+      if (Number(amount) <= 0) {
+        return res.status(400).json({ error: 'Amount must be positive' });
+      }
+
+      const before = await services.accountService.getAccount(accountId);
+      const balanceBefore = before?.balance || 0;
+
+      const result = await services.accountService.withdraw(accountId, Number(amount), reason || 'Withdrawal');
+
+      // Log transaction
+      const { v4: uuidv4 } = require('uuid');
+      await TransactionModel.create({
+        transactionId: 'TXN-' + uuidv4().slice(0, 8).toUpperCase(),
+        accountId,
+        type: 'WITHDRAWAL',
+        amount: Number(amount),
+        balanceBefore,
+        balanceAfter: balanceBefore - Number(amount),
+        reason: reason || 'Withdrawal',
+        status: 'COMPLETED',
+      });
+
+      await logAudit(accountId, 'WITHDRAWAL', `Withdrawal $${amount}`, { amount });
       res.json(result);
     } catch (error) {
       next(error);
@@ -506,10 +550,42 @@ async function setupEventSubscribers() {
         await services.accountService.unfreezeBalance(position.accountId, marginReleased, `Close position ${position.symbol}`);
       }
       
-      if (pnl > 0) {
-        await services.accountService.deposit(position.accountId, pnl, `Realized PnL for ${position.symbol}`);
-      } else if (pnl < 0) {
-        await services.accountService.withdraw(position.accountId, Math.abs(pnl), `Realized PnL for ${position.symbol}`);
+      if (pnl !== undefined) {
+        const { v4: uuidv4 } = require('uuid');
+        const before = await services.accountService.getAccount(position.accountId);
+        const balanceBefore = before?.balance || 0;
+        
+        let balanceAfter = balanceBefore;
+        if (pnl > 0) {
+          await services.accountService.deposit(position.accountId, pnl, `Realized PnL for ${position.symbol}`);
+          balanceAfter = balanceBefore + pnl;
+        } else if (pnl < 0) {
+          await services.accountService.withdraw(position.accountId, Math.abs(pnl), `Realized PnL for ${position.symbol}`, true);
+          balanceAfter = balanceBefore - Math.abs(pnl);
+        }
+
+        // Create transaction history entry for realized P&L
+        await TransactionModel.create({
+          transactionId: 'TXN-' + uuidv4().slice(0, 8).toUpperCase(),
+          accountId: position.accountId,
+          type: 'REALIZED_PNL',
+          amount: Math.abs(pnl),
+          balanceBefore,
+          balanceAfter,
+          reason: pnl > 0 
+            ? `Lợi nhuận đóng vị thế ${position.symbol} (${position.side})` 
+            : pnl < 0 
+              ? `Thua lỗ đóng vị thế ${position.symbol} (${position.side})`
+              : `Đóng vị thế hoà vốn ${position.symbol} (${position.side})`,
+          status: 'COMPLETED',
+        });
+
+        await logAudit(
+          position.accountId, 
+          'REALIZED_PNL', 
+          `Realized PnL for position ${position.symbol} (${position.side}): ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`,
+          { symbol: position.symbol, side: position.side, pnl, balanceBefore, balanceAfter }
+        );
       }
     } catch (error) {
       logger.error('Error processing PositionClosed event:', error);

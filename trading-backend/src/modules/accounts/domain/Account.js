@@ -48,9 +48,9 @@ class Account extends AggregateRoot {
     ));
   }
 
-  withdraw(amount, reason = 'Withdrawal') {
+  withdraw(amount, reason = 'Withdrawal', allowNegative = false) {
     if (amount <= 0) throw new Error('Withdrawal amount must be positive');
-    if (this.getAvailableBalance() < amount) {
+    if (!allowNegative && this.getAvailableBalance() < amount) {
       throw new Error('Insufficient available balance');
     }
     

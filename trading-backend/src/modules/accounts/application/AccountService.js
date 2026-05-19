@@ -78,7 +78,7 @@ class AccountService {
     }
   }
 
-  async withdraw(accountId, amount, reason = 'Withdrawal') {
+  async withdraw(accountId, amount, reason = 'Withdrawal', allowNegative = false) {
     try {
       let accountData = await this.cache.get(`account:${accountId}`);
       if (!accountData) {
@@ -94,7 +94,7 @@ class AccountService {
         accountData.frozenBalance
       );
       
-      account.withdraw(amount, reason);
+      account.withdraw(amount, reason, allowNegative);
       
       await this.accountRepository.save(account);
       
