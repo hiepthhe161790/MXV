@@ -15,6 +15,8 @@ const positionSchema = new mongoose.Schema({
   unrealizedPnL: { type: Number, required: true, default: 0 },
   marginUsed: { type: Number, required: true, default: 0 },
   leverage: { type: Number, required: true, default: 1 },
+  stopLossPrice: { type: Number, default: null },
+  takeProfitPrice: { type: Number, default: null },
   createdAt: { type: Date, required: true, default: Date.now },
   updatedAt: { type: Date, required: true, default: Date.now },
 }, { collection: 'positions' });

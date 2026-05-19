@@ -211,6 +211,14 @@ class PhuQuyService {
         this.syncStatus = 'SUCCESS';
         this.lastSyncError = null;
         logger.info('MongoDB Price cache updated with mock data successfully.');
+
+        if (this.eventBus) {
+          this.eventBus.publish({
+            aggregateId: 'SYSTEM',
+            eventType: 'PhuQuyPricesSynced',
+            data: { source: 'sandbox', prices: mockPrices },
+          }).catch(err => logger.error('Failed to publish PhuQuyPricesSynced event:', err));
+        }
       } catch (err) {
         logger.error('Failed to update Price Cache in MongoDB:', err);
       }
@@ -252,6 +260,14 @@ class PhuQuyService {
         this.syncStatus = 'SUCCESS';
         this.lastSyncError = null;
         logger.info('Price Cache updated successfully from Live PhuQuy API.');
+
+        if (this.eventBus) {
+          this.eventBus.publish({
+            aggregateId: 'SYSTEM',
+            eventType: 'PhuQuyPricesSynced',
+            data: { source: 'live', prices: response.data },
+          }).catch(err => logger.error('Failed to publish PhuQuyPricesSynced event:', err));
+        }
         
         return {
           ...response,

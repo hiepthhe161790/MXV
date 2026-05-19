@@ -3,7 +3,10 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 require('express-async-errors');
+const http = require('http');
 const logger = require('./shared/infrastructure/Logger');
+const webSocketServer = require('./infrastructure/WebSocketServer');
+const PriceFeedService = require('./modules/market/application/PriceFeedService');
 
 // Services & Repositories
 const Database = require('./shared/infrastructure/Database');
@@ -38,6 +41,9 @@ const { TransactionModel, AuditModel, logAudit } = require('./api/accountRoutes'
 const createOrderRoutes = require('./api/orderRoutes');
 const createPositionRoutes = require('./api/positionRoutes');
 const createPhuQuyRoutes = require('./api/phuQuyRoutes');
+
+// PhuQuy Service
+const phuQuyService = require('./modules/phuquy/application/PhuQuyService');
 
 
 const app = express();
@@ -146,6 +152,9 @@ async function initializeServices() {
       services.settlementRepository,
       services.eventBus
     );
+
+    // Wire up EventBus to PhuQuy gateway integration
+    phuQuyService.eventBus = services.eventBus;
 
     logger.info('All services initialized successfully');
 
@@ -526,29 +535,142 @@ async function setupEventSubscribers() {
     }
   }, 'margin-call-queue');
 
-  // Auto liquidation event
+  // Auto liquidation event - Close positions and audit
   await services.eventBus.subscribe('AutoLiquidationTriggered', async (event) => {
     try {
-      logger.error(`Auto-liquidation triggered for account: ${event.aggregateId}`);
+      const accountId = event.aggregateId;
+      logger.error(`Auto-liquidation triggered for account: ${accountId}`);
+
+      // Log the event to database audit
       await services.settlementService.logAuditEvent(
-        event.aggregateId,
+        accountId,
         'AutoLiquidation',
         'LIQUIDATION',
-        event.aggregateId,
+        accountId,
         {},
         event.data,
         'Account auto-liquidated due to margin breach',
         'CRITICAL'
       );
+
+      // Liquidate positions: Close them all at their currentPrice
+      const positionsToLiquidate = await services.positionService.getOpenPositions(accountId);
+      
+      for (const pos of positionsToLiquidate) {
+        if (pos.quantity > 0) {
+          logger.warn(`Liquidating position: ${pos.symbol} for account ${accountId} at price ${pos.currentPrice}`);
+          
+          await services.positionService.closePosition(
+            accountId, 
+            pos.symbol, 
+            pos.currentPrice || pos.entryPrice
+          );
+        }
+      }
     } catch (error) {
       logger.error('Error processing AutoLiquidationTriggered event:', error);
     }
   }, 'liquidation-queue');
 
+  // PhuQuy prices synced event - Update open positions prices
+  await services.eventBus.subscribe('PhuQuyPricesSynced', async (event) => {
+    try {
+      const { prices } = event.data;
+      if (!Array.isArray(prices)) return;
+
+      logger.info(`Processing ${prices.length} synced prices from PhuQuy to update positions...`);
+
+      const positions = await services.positionService.positionRepository.findAll();
+      const openPositions = positions.filter(p => p.quantity > 0);
+
+      for (const pos of openPositions) {
+        const priceItem = prices.find(p => p.goods_id === pos.symbol);
+        if (priceItem) {
+          // LONG positions close at buy price, SHORT positions close at sell price
+          const marketPrice = pos.side === 'LONG' ? priceItem.buy_price : priceItem.sell_price;
+          
+          if (marketPrice && marketPrice > 0) {
+            logger.debug(`Updating price of position ${pos.symbol} for account ${pos.accountId} to ${marketPrice}`);
+            await services.positionService.updatePrice(pos.accountId, pos.symbol, marketPrice);
+          }
+        }
+      }
+    } catch (error) {
+      logger.error('Error processing PhuQuyPricesSynced event:', error);
+    }
+  }, 'phuquy-prices-synced-queue');
+
+  // Position Price Updated event - Check SL/TP and Risk Limits (Margin Call / Liquidation)
+  await services.eventBus.subscribe('PriceUpdated', async (event) => {
+    try {
+      const positionId = event.aggregateId;
+      const positions = await services.positionService.positionRepository.findAll();
+      const position = positions.find(p => p.id === positionId || p._id === positionId);
+      if (!position || position.quantity === 0) return;
+
+      const { currentPrice } = event.data;
+
+      // 1. Check Stop Loss (SL) & Take Profit (TP)
+      let shouldClose = false;
+      let closeReason = '';
+
+      if (position.side === 'LONG') {
+        if (position.stopLossPrice && currentPrice <= position.stopLossPrice) {
+          shouldClose = true;
+          closeReason = `Stop Loss triggered at ${currentPrice} (SL=${position.stopLossPrice})`;
+        } else if (position.takeProfitPrice && currentPrice >= position.takeProfitPrice) {
+          shouldClose = true;
+          closeReason = `Take Profit triggered at ${currentPrice} (TP=${position.takeProfitPrice})`;
+        }
+      } else if (position.side === 'SHORT') {
+        if (position.stopLossPrice && currentPrice >= position.stopLossPrice) {
+          shouldClose = true;
+          closeReason = `Stop Loss triggered at ${currentPrice} (SL=${position.stopLossPrice})`;
+        } else if (position.takeProfitPrice && currentPrice <= position.takeProfitPrice) {
+          shouldClose = true;
+          closeReason = `Take Profit triggered at ${currentPrice} (TP=${position.takeProfitPrice})`;
+        }
+      }
+
+      if (shouldClose) {
+        logger.warn(`Auto-closing position ${position.symbol} for account ${position.accountId}: ${closeReason}`);
+        
+        const closedPos = await services.positionService.closePosition(position.accountId, position.symbol, currentPrice);
+        
+        await services.settlementService.logAuditEvent(
+          position.accountId,
+          'AutoCloseTriggered',
+          'AUTO_CLOSE',
+          position.id,
+          position,
+          closedPos,
+          closeReason,
+          'INFO'
+        );
+        
+        return; // Position closed, no need to perform margin checks
+      }
+
+      // 2. Check Margin Call and Auto-Liquidation Conditions
+      const account = await services.accountService.getAccount(position.accountId);
+      const accountPositions = await services.positionService.getOpenPositions(position.accountId);
+
+      if (account && accountPositions.length > 0) {
+        await services.riskService.handleMarginCheck(account, accountPositions);
+        await services.riskService.handleAutoLiquidation(account, accountPositions);
+      }
+    } catch (error) {
+      logger.error('Error processing PriceUpdated event:', error);
+    }
+  }, 'price-updated-queue');
+
   logger.info('Event subscribers configured');
 }
 
 // Start server
+let httpServer;
+let priceFeedService;
+
 async function startServer() {
   try {
     await initializeServices();
@@ -556,7 +678,22 @@ async function startServer() {
     await setupEventSubscribers();
 
     const port = process.env.PORT || 3001;
-    app.listen(port, () => {
+    
+    // Wrap Express app with HTTP Server
+    httpServer = http.createServer(app);
+    
+    // Initialize WebSocket server
+    webSocketServer.initialize(httpServer);
+    
+    // Initialize and start Real-time Yahoo Price Feed
+    priceFeedService = new PriceFeedService(
+      services.positionService,
+      services.matchingEngine,
+      webSocketServer
+    );
+    priceFeedService.start(10000); // Sync every 10 seconds
+
+    httpServer.listen(port, () => {
       logger.info(`Trading Exchange API started on port ${port}`);
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
     });
@@ -569,6 +706,9 @@ async function startServer() {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully...');
+  if (priceFeedService) priceFeedService.stop();
+  webSocketServer.close();
+  if (httpServer) httpServer.close();
   if (services.cache) await services.cache.disconnect();
   if (services.eventBus) await services.eventBus.disconnect();
   await Database.disconnect();

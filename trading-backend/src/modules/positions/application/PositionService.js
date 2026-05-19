@@ -202,10 +202,44 @@ class PositionService {
     position.unrealizedPnL = positionData.unrealizedPnL;
     position.marginUsed = positionData.marginUsed;
     position.leverage = positionData.leverage;
+    position.stopLossPrice = positionData.stopLossPrice;
+    position.takeProfitPrice = positionData.takeProfitPrice;
     position.createdAt = positionData.createdAt;
     position.updatedAt = positionData.updatedAt;
 
     return position;
+  }
+
+  /**
+   * Set Stop Loss and Take Profit levels
+   */
+  async updateSLTP(accountId, symbol, stopLossPrice, takeProfitPrice) {
+    try {
+      let positionData = await this.cache.get(`position:${accountId}:${symbol}`);
+      if (!positionData) {
+        positionData = await this.positionRepository.findByAccountAndSymbol(accountId, symbol);
+      }
+
+      if (!positionData) throw new Error('Position not found');
+
+      const position = this.reconstructPosition(positionData);
+      position.updateSLTP(stopLossPrice, takeProfitPrice);
+
+      await this.positionRepository.save(position);
+      for (const event of position.getUncommittedEvents()) {
+        await this.eventBus.publish(event);
+      }
+      position.markEventsAsCommitted();
+
+      await this.cache.set(`position:${accountId}:${symbol}`, position.toJSON());
+      await this.cache.invalidatePattern(`positions:account:${accountId}`);
+
+      logger.info(`SL/TP updated for position ${symbol}: SL=${stopLossPrice}, TP=${takeProfitPrice}`);
+      return position.toJSON();
+    } catch (error) {
+      logger.error('Error updating SL/TP for position:', error);
+      throw error;
+    }
   }
 }
 

@@ -1,22 +1,58 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 import { useAuthStore, useTradingStore } from '@/context/store';
 import { tradingService } from '@/services/tradingService';
+import { useMarketSocket } from '@/hooks/useMarketSocket';
 import toast from 'react-hot-toast';
+
+const BASE_PRICES: Record<string, number> = {
+  'GCZ24': 2150,
+  'SIZ24': 25.5,
+  'CLZ24': 78.5,
+  'NGF25': 2.8,
+  'HGZ24': 3.95,
+  'ZCZ24': 470,
+  'ZSF25': 1020,
+  'KCZ24': 185,
+};
 
 export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: string }) {
   const { account } = useAuthStore();
+  const { prices } = useMarketSocket();
   const { orders, setOrders } = useTradingStore();
+  
   const [formData, setFormData] = useState({
     symbol: preselectedSymbol || 'GCZ24',
     side: 'BUY',
     quantity: 1,
     orderType: 'LIMIT',
-    limitPrice: 2150,
+    limitPrice: BASE_PRICES[preselectedSymbol || 'GCZ24'],
     stopPrice: '',
   });
 
   const [loading, setLoading] = useState(false);
+
+  // Sync when preselectedSymbol changes
+  useEffect(() => {
+    if (preselectedSymbol) {
+      const livePrice = prices[preselectedSymbol]?.price ?? BASE_PRICES[preselectedSymbol] ?? 0;
+      setFormData((prev) => ({
+        ...prev,
+        symbol: preselectedSymbol,
+        limitPrice: livePrice,
+      }));
+    }
+  }, [preselectedSymbol]);
+
+  // Handle manual dropdown selection
+  const handleSymbolChange = (symbol: string) => {
+    const livePrice = prices[symbol]?.price ?? BASE_PRICES[symbol] ?? 0;
+    setFormData((prev) => ({
+      ...prev,
+      symbol,
+      limitPrice: livePrice,
+    }));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,9 +67,9 @@ export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: s
       const payload = {
         accountId: account._id,
         symbol: formData.symbol,
-        side: formData.side,
+        side: formData.side as 'BUY' | 'SELL',
         quantity: formData.quantity,
-        orderType: formData.orderType,
+        orderType: formData.orderType as 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT',
         limitPrice:
           formData.orderType === 'LIMIT' || formData.orderType === 'STOP_LIMIT'
             ? Number(formData.limitPrice)
@@ -69,9 +105,7 @@ export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: s
             <label className="block text-sm text-slate-300 mb-2">Symbol</label>
             <select
               value={formData.symbol}
-              onChange={(e) =>
-                setFormData({ ...formData, symbol: e.target.value })
-              }
+              onChange={(e) => handleSymbolChange(e.target.value)}
               className="input"
             >
               <option value="GCZ24">GCZ24 — Gold</option>
@@ -135,6 +169,7 @@ export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: s
             <label className="block text-sm text-slate-300 mb-2">Limit Price</label>
             <input
               type="number"
+              step="any"
               value={formData.limitPrice}
               onChange={(e) =>
                 setFormData({ ...formData, limitPrice: parseFloat(e.target.value) })
@@ -151,6 +186,7 @@ export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: s
             <label className="block text-sm text-slate-300 mb-2">Stop Price</label>
             <input
               type="number"
+              step="any"
               value={formData.stopPrice}
               onChange={(e) =>
                 setFormData({ ...formData, stopPrice: e.target.value })

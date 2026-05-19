@@ -116,40 +116,58 @@ class MatchingEngine {
       if (!this.orderBook[symbol]) return [];
 
       const trades = [];
-      
-      // Match market orders at new price
       const buyOrders = this.orderBook[symbol]['BUY'];
       const sellOrders = this.orderBook[symbol]['SELL'];
 
+      // 1. Match BUY LIMIT orders in the book against the new market price
+      // A BUY LIMIT matches if its limitPrice >= newPrice
+      for (let i = buyOrders.length - 1; i >= 0; i--) {
+        const buyOrder = buyOrders[i];
+        if (buyOrder.limitPrice >= newPrice) {
+          const mockOpposingOrder = {
+            id: 'mock-liq-' + uuidv4(),
+            accountId: 'mock-liquidity-provider',
+            side: 'SELL',
+            symbol: symbol,
+            quantity: buyOrder.quantity,
+            orderType: 'LIMIT',
+            limitPrice: newPrice
+          };
+
+          const trade = await this._createTrade(buyOrder, mockOpposingOrder, buyOrder.quantity, newPrice);
+          await this._publishTradeEvents(trade, buyOrder, mockOpposingOrder, buyOrder.quantity, newPrice);
+          
+          trades.push(trade);
+          logger.info(`BUY LIMIT order matched against market price ${newPrice}: ${buyOrder.id}`);
+          
+          // Remove from book
+          buyOrders.splice(i, 1);
+        }
+      }
+
+      // 2. Match SELL LIMIT orders in the book against the new market price
+      // A SELL LIMIT matches if its limitPrice <= newPrice
       for (let i = sellOrders.length - 1; i >= 0; i--) {
         const sellOrder = sellOrders[i];
-        if (sellOrder.limitPrice === null || sellOrder.limitPrice <= newPrice) {
-          // Sell order matches at new price
-          if (buyOrders.length > 0) {
-            const buyOrder = buyOrders[0];
-            const fillQuantity = Math.min(buyOrder.quantity, sellOrder.quantity);
-            
-            const trade = new Trade(
-              uuidv4(),
-              buyOrder.id,
-              sellOrder.id,
-              symbol,
-              fillQuantity,
-              newPrice
-            );
-            trade.buyerAccountId = buyOrder.accountId;
-            trade.sellerAccountId = sellOrder.accountId;
-            
-            trades.push(trade);
-            
-            await this._publishTradeEvents(trade, buyOrder, sellOrder, fillQuantity, newPrice);
-            
-            buyOrder.quantity -= fillQuantity;
-            sellOrder.quantity -= fillQuantity;
-            
-            if (buyOrder.quantity === 0) buyOrders.shift();
-            if (sellOrder.quantity === 0) sellOrders.splice(i, 1);
-          }
+        if (sellOrder.limitPrice <= newPrice) {
+          const mockOpposingOrder = {
+            id: 'mock-liq-' + uuidv4(),
+            accountId: 'mock-liquidity-provider',
+            side: 'BUY',
+            symbol: symbol,
+            quantity: sellOrder.quantity,
+            orderType: 'LIMIT',
+            limitPrice: newPrice
+          };
+
+          const trade = await this._createTrade(mockOpposingOrder, sellOrder, sellOrder.quantity, newPrice);
+          await this._publishTradeEvents(trade, mockOpposingOrder, sellOrder, sellOrder.quantity, newPrice);
+          
+          trades.push(trade);
+          logger.info(`SELL LIMIT order matched against market price ${newPrice}: ${sellOrder.id}`);
+          
+          // Remove from book
+          sellOrders.splice(i, 1);
         }
       }
 
