@@ -2,6 +2,17 @@ const Trade = require('../domain/Trade');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../../../shared/infrastructure/Logger');
 
+const BASE_PRICES = {
+  'GCZ24': 2150,
+  'SIZ24': 25.5,
+  'CLZ24': 78.5,
+  'NGF25': 2.8,
+  'HGZ24': 3.95,
+  'ZCZ24': 470,
+  'ZSF25': 1020,
+  'KCZ24': 185,
+};
+
 /**
  * Matching Engine Simulator
  * Simulates order matching for testing
@@ -11,6 +22,7 @@ class MatchingEngine {
   constructor(eventBus) {
     this.eventBus = eventBus;
     this.orderBook = {}; // { symbol: { BUY: [], SELL: [] } }
+    this.latestPrices = {};
   }
 
   /**
@@ -32,7 +44,7 @@ class MatchingEngine {
         // Check if price matches
         if (this._isPriceMatched(order, matchedOrder)) {
           const fillQuantity = Math.min(remainingQuantity, matchedOrder.quantity);
-          const tradePrice = matchedOrder.limitPrice || order.limitPrice || 100; // Use limit price or default
+          const tradePrice = matchedOrder.limitPrice || order.limitPrice || BASE_PRICES[order.symbol] || 100; // Use limit price or default
           
           // Create trade
           const trade = await this._createTrade(order, matchedOrder, fillQuantity, tradePrice);
@@ -54,7 +66,7 @@ class MatchingEngine {
       if (remainingQuantity > 0) {
         if (order.orderType === 'MARKET') {
           // MOCK: Auto-fill remaining market orders against a simulated liquidity provider
-          const mockPrice = order.limitPrice || 100;
+          const mockPrice = order.limitPrice || this.latestPrices[order.symbol] || BASE_PRICES[order.symbol] || 100;
           const mockOpposingOrder = {
             id: 'mock-liq-' + uuidv4(),
             accountId: 'mock-liquidity-provider',
@@ -113,6 +125,7 @@ class MatchingEngine {
    */
   async simulatePriceMovement(symbol, newPrice) {
     try {
+      this.latestPrices[symbol] = newPrice;
       if (!this.orderBook[symbol]) return [];
 
       const trades = [];

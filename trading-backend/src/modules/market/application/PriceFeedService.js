@@ -92,12 +92,34 @@ class PriceFeedService {
   }
 
   /**
+   * Load cached market prices from DB on startup
+   */
+  async loadCachedPrices() {
+    try {
+      const MarketPriceModel = require('../infrastructure/MarketPriceModel');
+      const cached = await MarketPriceModel.find();
+      for (const item of cached) {
+        this.latestPrices[item.symbol] = { price: item.price, change: item.change };
+        if (this.matchingEngine) {
+          this.matchingEngine.latestPrices[item.symbol] = item.price;
+        }
+      }
+      logger.info(`Loaded ${cached.length} cached market prices from DB on startup`);
+    } catch (err) {
+      logger.error('Failed to load cached market prices from DB:', err.message);
+    }
+  }
+
+  /**
    * Start the periodic price feed sync task
    */
-  start(intervalMs = 10000) {
+  async start(intervalMs = 10000) {
     if (this.intervalId) return;
 
     logger.info(`Starting real-time Yahoo PriceFeedService with interval of ${intervalMs}ms...`);
+
+    // Load cached prices from DB first to get up-to-date prices immediately
+    await this.loadCachedPrices();
 
     const syncTask = async () => {
       try {
@@ -129,10 +151,22 @@ class PriceFeedService {
             } catch (posErr) {
               logger.error(`Error updating open positions for ${appSymbol}:`, posErr.message);
             }
+
+            // 3. Save price to MongoDB cache
+            try {
+              const MarketPriceModel = require('../infrastructure/MarketPriceModel');
+              await MarketPriceModel.findOneAndUpdate(
+                { symbol: appSymbol },
+                { price: feed.price, change: feed.change, updatedAt: new Date() },
+                { upsert: true, new: true }
+              );
+            } catch (dbErr) {
+              logger.error(`Error saving price cache for ${appSymbol}:`, dbErr.message);
+            }
           }
         }
 
-        // 3. Broadcast price updates to all connected clients over WebSocket
+        // 4. Broadcast price updates to all connected clients over WebSocket
         if (Object.keys(updatedPrices).length > 0) {
           logger.info(`Broadcasting updated market prices: ${JSON.stringify(updatedPrices)}`);
           this.webSocketServer.broadcast('market:prices', updatedPrices);
