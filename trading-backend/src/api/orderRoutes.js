@@ -38,10 +38,18 @@ function createOrderRoutes(orderService, riskService, matchingEngine, accountSer
         return res.status(400).json({ error: 'Missing required fields' });
       }
 
-      // Get account and positions
+      // Get account and check status
       const account = await accountService.getAccount(accountId);
       if (!account) {
         return res.status(404).json({ error: 'Account not found' });
+      }
+
+      // Check account status - reject orders for suspended/liquidated accounts
+      if (account.status && account.status !== 'ACTIVE') {
+        return res.status(403).json({ 
+          error: `Cannot place order: account status is ${account.status}`,
+          code: 'ACCOUNT_NOT_ACTIVE'
+        });
       }
 
       const positions = await positionService.getPositionsByAccount(accountId);

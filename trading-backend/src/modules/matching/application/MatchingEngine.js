@@ -19,10 +19,48 @@ const BASE_PRICES = {
  * In production, this would connect to a real exchange or matching engine
  */
 class MatchingEngine {
-  constructor(eventBus) {
+  constructor(eventBus, cache) {
     this.eventBus = eventBus;
+    this.cache = cache;
     this.orderBook = {}; // { symbol: { BUY: [], SELL: [] } }
     this.latestPrices = {};
+  }
+
+  /**
+   * Resolve the current market price for a symbol.
+   * Priority: Redis cache → latestPrices (from PriceFeed) → BASE_PRICES → throw
+   */
+  async _resolvePrice(symbol) {
+    logger.info(`[MatchingEngine] _resolvePrice called for ${symbol}. cache=${!!this.cache}`);
+    // 1. Try Redis cache (most authoritative, set by PriceFeedService on every tick)
+    if (this.cache) {
+      try {
+        const cached = await this.cache.get(`market:price:${symbol}`);
+        logger.info(`[MatchingEngine] Redis market:price:${symbol} = ${JSON.stringify(cached)} (type: ${typeof cached})`);
+        if (cached !== null && cached !== undefined) {
+          const price = Number(cached);
+          if (price > 0) {
+            logger.info(`[MatchingEngine] Resolved price for ${symbol} from Redis: ${price}`);
+            return price;
+          }
+        }
+      } catch (e) {
+        logger.warn(`[MatchingEngine] Cache read failed for ${symbol}: ${e.message}`);
+      }
+    }
+    // 2. In-memory latest from PriceFeed
+    const inMemory = this.latestPrices[symbol];
+    logger.info(`[MatchingEngine] In-memory latestPrices[${symbol}] = ${JSON.stringify(inMemory)}`);
+    if (inMemory && Number(inMemory) > 0) {
+      logger.info(`[MatchingEngine] Resolved price for ${symbol} from latestPrices: ${Number(inMemory)}`);
+      return Number(inMemory);
+    }
+    // 3. Static base price
+    if (BASE_PRICES[symbol]) {
+      logger.warn(`[MatchingEngine] Using BASE_PRICES fallback for ${symbol}: ${BASE_PRICES[symbol]}. Cache may not be ready yet.`);
+      return BASE_PRICES[symbol];
+    }
+    throw new Error(`[MatchingEngine] Cannot resolve market price for symbol: ${symbol}. Price feed not ready.`);
   }
 
   /**
@@ -44,7 +82,19 @@ class MatchingEngine {
         // Check if price matches
         if (this._isPriceMatched(order, matchedOrder)) {
           const fillQuantity = Math.min(remainingQuantity, matchedOrder.quantity);
-          const tradePrice = matchedOrder.limitPrice || order.limitPrice || BASE_PRICES[order.symbol] || 100; // Use limit price or default
+          // Use matched order price first, then order price, then resolve from market
+          let tradePrice = matchedOrder.limitPrice || order.limitPrice;
+          if (!tradePrice) {
+            try {
+              tradePrice = await this._resolvePrice(order.symbol);
+            } catch (e) {
+              logger.warn(`Failed to resolve price for ${order.symbol}, using BASE_PRICES`);
+              tradePrice = BASE_PRICES[order.symbol];
+              if (!tradePrice) {
+                throw new Error(`Cannot determine trade price for ${order.symbol}`);
+              }
+            }
+          }
           
           // Create trade
           const trade = await this._createTrade(order, matchedOrder, fillQuantity, tradePrice);
@@ -64,9 +114,12 @@ class MatchingEngine {
 
       // Add remaining quantity to order book (only if not market)
       if (remainingQuantity > 0) {
+        logger.info(`[MatchingEngine] Remaining qty=${remainingQuantity}, orderType=${order.orderType}, symbol=${order.symbol}`);
         if (order.orderType === 'MARKET') {
-          // MOCK: Auto-fill remaining market orders against a simulated liquidity provider
-          const mockPrice = order.limitPrice || this.latestPrices[order.symbol] || BASE_PRICES[order.symbol] || 100;
+          // Auto-fill remaining market orders against a simulated liquidity provider
+          // Always resolve real market price from cache, never use hardcoded 100
+          const mockPrice = order.limitPrice || await this._resolvePrice(order.symbol);
+          logger.info(`[MatchingEngine] MARKET order ${order.id}: filling at price=${mockPrice}`);
           const mockOpposingOrder = {
             id: 'mock-liq-' + uuidv4(),
             accountId: 'mock-liquidity-provider',

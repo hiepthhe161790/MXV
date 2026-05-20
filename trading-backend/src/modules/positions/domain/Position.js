@@ -41,15 +41,19 @@ class Position extends AggregateRoot {
     const normalizedTradeSide = tradeSide === 'BUY' ? 'LONG' : (tradeSide === 'SELL' ? 'SHORT' : tradeSide);
 
     if (this.quantity === 0) {
-      // Opening a new position from a flat state
+      // Opening a new position from a flat state — reset realized P&L so previous
+      // closed-trade history doesn't bleed into the new position display
+      this.realizedPnL = 0;
       this.side = normalizedTradeSide;
       this.quantity = tradeQuantity;
       this.entryPrice = tradePrice;
+      this.currentPrice = tradePrice; // Set current price to fill price
     } else if (normalizedTradeSide === this.side) {
       // Adding to existing position
       const newTotal = (this.quantity * this.entryPrice) + (tradeQuantity * tradePrice);
       this.quantity += tradeQuantity;
       this.entryPrice = newTotal / this.quantity;
+      this.currentPrice = tradePrice; // Update current price to latest fill price
     } else {
       // Closing or reversing position
       if (tradeQuantity > this.quantity) {
@@ -63,6 +67,7 @@ class Position extends AggregateRoot {
         // Open the remaining in the opposite direction
         this.quantity = tradeQuantity - this.quantity;
         this.entryPrice = tradePrice;
+        this.currentPrice = tradePrice;
         this.side = normalizedTradeSide;
       } else if (tradeQuantity === this.quantity) {
         // Exact close
@@ -72,6 +77,7 @@ class Position extends AggregateRoot {
           
         this.realizedPnL += closingPnL;
         this.quantity = 0;
+        this.currentPrice = tradePrice; // Record close price
       } else {
         // Partial close
         const closingPnL = this.side === 'LONG'
@@ -80,10 +86,16 @@ class Position extends AggregateRoot {
           
         this.realizedPnL += closingPnL;
         this.quantity -= tradeQuantity;
+        this.currentPrice = tradePrice; // Update current price
       }
     }
 
-    this.marginUsed = (this.quantity * this.entryPrice) / this.leverage;
+    // Margin is based on quantity × current market price / leverage
+    // This way margin reflects actual risk exposure
+    this.marginUsed = this.quantity > 0 ? (this.quantity * this.currentPrice) / this.leverage : 0;
+    
+    // Recalculate unrealized P&L now that currentPrice is updated
+    this.recalculatePnL();
 
     this.raiseEvent(new DomainEvent(
       this.id,
@@ -91,6 +103,7 @@ class Position extends AggregateRoot {
       {
         quantity: this.quantity,
         entryPrice: this.entryPrice,
+        currentPrice: this.currentPrice,
         realizedPnL: this.realizedPnL,
         unrealizedPnL: this.unrealizedPnL,
         marginUsed: this.marginUsed,
@@ -147,6 +160,8 @@ class Position extends AggregateRoot {
       ? (closePrice - this.entryPrice) * this.quantity
       : (this.entryPrice - closePrice) * this.quantity;
 
+    const marginBeforeClose = this.marginUsed;
+
     this.realizedPnL += closingPnL;
     this.unrealizedPnL = 0;
     this.quantity = 0;
@@ -161,7 +176,7 @@ class Position extends AggregateRoot {
         closePrice,
         realizedPnL: this.realizedPnL,
         totalPnL: this.realizedPnL + this.unrealizedPnL,
-        marginUsed: this.marginUsed,
+        marginUsed: marginBeforeClose,
       }
     ));
   }

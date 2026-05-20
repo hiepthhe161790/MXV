@@ -36,6 +36,26 @@ class WebSocketServer {
       
       // Send a welcome event
       ws.send(JSON.stringify({ type: 'welcome', message: 'Connected to MVX Trading Exchange real-time feed' }));
+
+      // Fetch and send latest market prices immediately so the client doesn't wait
+      const mongoose = require('mongoose');
+      const MarketPriceModel = mongoose.models.MarketPrice || require('../modules/market/infrastructure/MarketPriceModel');
+      
+      MarketPriceModel.find({}).then((prices) => {
+        if (prices && prices.length > 0) {
+          const initialPrices = {};
+          prices.forEach((p) => {
+            initialPrices[p.symbol] = { price: p.price, change: p.change };
+          });
+          ws.send(JSON.stringify({
+            type: 'market:prices',
+            data: initialPrices,
+            timestamp: new Date()
+          }));
+        }
+      }).catch((err) => {
+        logger.error('Failed to send initial prices over WS:', err.message);
+      });
     });
 
     logger.info('WebSocket Server initialized successfully');

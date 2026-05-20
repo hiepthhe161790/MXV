@@ -169,6 +169,28 @@ export default function MarketPage() {
     });
   }, [prices]);
 
+  if (Object.keys(prices).length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[500px] space-y-6 bg-slate-900/40 rounded-2xl border border-slate-800 p-8 text-center animate-fadeIn">
+        {/* Modern glowing spinner */}
+        <div className="relative w-16 h-16">
+          <div className="absolute inset-0 rounded-full border-4 border-slate-800"></div>
+          <div className="absolute inset-0 rounded-full border-4 border-blue-500 border-t-transparent animate-spin shadow-lg"></div>
+        </div>
+        <div className="space-y-2">
+          <h3 className="text-xl font-bold text-white">Đang đồng bộ bảng giá thời gian thực...</h3>
+          <p className="text-slate-400 text-sm max-w-md mx-auto">
+            Hệ thống đang kết nối WebSocket và tải bảng giá hàng hóa cập nhật mới nhất từ Price Feed.
+          </p>
+        </div>
+        <div className="flex items-center space-x-2 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700/50">
+          <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></span>
+          <span className="text-xs text-slate-400 font-mono">Status: Connecting WebSocket...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 animate-fadeIn">
       {/* Header */}
