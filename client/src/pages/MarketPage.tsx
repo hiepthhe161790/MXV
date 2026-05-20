@@ -1,7 +1,8 @@
-import { useEffect, useState, useRef } from 'react';
-import { TrendingUp, TrendingDown, Activity, BarChart2, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { TrendingUp, TrendingDown, Activity, BarChart2 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import OrderForm from '@/components/OrderForm';
+import { useMarketSocket } from '@/hooks/useMarketSocket';
 
 // ── Commodity catalog ──────────────────────────────────────────────────────────
 const INSTRUMENTS = [
@@ -15,12 +16,12 @@ const INSTRUMENTS = [
   { symbol: 'KCZ24', name: 'Coffee',         unit: 'lb',    group: 'Agri',     color: '#a16207', base: 185,  tickSize: 0.05, tickValue: 18.75,  leverage: 10, contractSize: 37500 },
 ];
 
-// ── Price simulation ───────────────────────────────────────────────────────────
+// ── Price simulation (Used to seed chart histories initially) ───────────────────
 function simulatePrices(base: number, count = 60): { time: string; price: number }[] {
   let price = base;
   const now = Date.now();
   return Array.from({ length: count }, (_, i) => {
-    price += (Math.random() - 0.495) * base * 0.002;
+    price += (Math.random() - 0.495) * base * 0.001;
     price = Math.max(price, base * 0.85);
     const t = new Date(now - (count - i) * 60000);
     return {
@@ -30,35 +31,20 @@ function simulatePrices(base: number, count = 60): { time: string; price: number
   });
 }
 
-function useLivePrice(base: number) {
-  const [price, setPrice] = useState(base);
-  const [change, setChange] = useState(0);
-  const [history, setHistory] = useState<{ time: string; price: number }[]>(() => simulatePrices(base));
-  const baseRef = useRef(base);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const delta = (Math.random() - 0.495) * baseRef.current * 0.002;
-      setPrice(p => {
-        const newP = Math.max(parseFloat((p + delta).toFixed(2)), baseRef.current * 0.5);
-        setChange(parseFloat((((newP - baseRef.current) / baseRef.current) * 100).toFixed(2)));
-        setHistory(h => {
-          const now = new Date();
-          const timeStr = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0') + ':' + now.getSeconds().toString().padStart(2, '0');
-          return [...h.slice(-79), { time: timeStr, price: newP }];
-        });
-        return newP;
-      });
-    }, 1200);
-    return () => clearInterval(interval);
-  }, []);
-
-  return { price, change, history };
-}
-
 // ── Single instrument row ──────────────────────────────────────────────────────
-function InstrumentRow({ inst, onClick, isSelected }: { inst: typeof INSTRUMENTS[0]; onClick: () => void; isSelected: boolean }) {
-  const { price, change } = useLivePrice(inst.base);
+function InstrumentRow({ 
+  inst, 
+  onClick, 
+  isSelected,
+  price,
+  change
+}: { 
+  inst: typeof INSTRUMENTS[0]; 
+  onClick: () => void; 
+  isSelected: boolean;
+  price: number;
+  change: number;
+}) {
   const isUp = change >= 0;
   return (
     <tr
@@ -95,8 +81,17 @@ function InstrumentRow({ inst, onClick, isSelected }: { inst: typeof INSTRUMENTS
 }
 
 // ── Chart for selected instrument ─────────────────────────────────────────────
-function PriceChart({ inst }: { inst: typeof INSTRUMENTS[0] }) {
-  const { price, change, history } = useLivePrice(inst.base);
+function PriceChart({ 
+  inst,
+  price,
+  change,
+  history 
+}: { 
+  inst: typeof INSTRUMENTS[0];
+  price: number;
+  change: number;
+  history: { time: string; price: number }[];
+}) {
   const isUp = change >= 0;
   return (
     <div className="card">
@@ -138,7 +133,41 @@ function PriceChart({ inst }: { inst: typeof INSTRUMENTS[0] }) {
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function MarketPage() {
+  const { prices, isConnected } = useMarketSocket();
   const [selected, setSelected] = useState(INSTRUMENTS[0]);
+
+  // Maintain custom tick history inside React state so that chart updates in real-time
+  const [priceHistory, setPriceHistory] = useState<Record<string, { time: string; price: number }[]>>(() => {
+    const initialHistories: Record<string, { time: string; price: number }[]> = {};
+    INSTRUMENTS.forEach((inst) => {
+      initialHistories[inst.symbol] = simulatePrices(inst.base, 40);
+    });
+    return initialHistories;
+  });
+
+  // Append new real-time price tick when received via socket
+  useEffect(() => {
+    const now = new Date();
+    const timeStr = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0') + ':' + now.getSeconds().toString().padStart(2, '0');
+
+    setPriceHistory((prev) => {
+      const updated = { ...prev };
+      let changed = false;
+
+      Object.entries(prices).forEach(([symbol, info]) => {
+        const history = updated[symbol] || [];
+        const lastPoint = history[history.length - 1];
+
+        // Append to history if the price changed to keep chart alive
+        if (!lastPoint || lastPoint.price !== info.price) {
+          updated[symbol] = [...history.slice(-79), { time: timeStr, price: info.price }];
+          changed = true;
+        }
+      });
+
+      return changed ? updated : prev;
+    });
+  }, [prices]);
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -160,9 +189,13 @@ export default function MarketPage() {
             <div className="px-6 py-3 bg-slate-700/50 border-b border-slate-700 flex items-center space-x-2">
               <Activity size={16} className="text-green-400" />
               <span className="text-sm font-semibold text-white">Live Prices</span>
-              <span className="ml-auto flex items-center space-x-1">
-                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                <span className="text-xs text-slate-400">Simulated</span>
+              
+              {/* WebSocket connection status indicator */}
+              <span className="ml-auto flex items-center space-x-1.5">
+                <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${isConnected ? 'bg-green-400' : 'bg-yellow-500'}`} />
+                <span className="text-xs text-slate-300 font-medium">
+                  {isConnected ? 'Real-time Feed' : 'Connecting/Simulating...'}
+                </span>
               </span>
             </div>
             <table className="table w-full">
@@ -178,14 +211,20 @@ export default function MarketPage() {
                 </tr>
               </thead>
               <tbody>
-                {INSTRUMENTS.map(inst => (
-                  <InstrumentRow
-                    key={inst.symbol}
-                    inst={inst}
-                    onClick={() => setSelected(inst)}
-                    isSelected={inst.symbol === selected.symbol}
-                  />
-                ))}
+                {INSTRUMENTS.map((inst) => {
+                  // Resolve current price and change pct, fallback to base properties if socket hasn't pushed yet
+                  const feed = prices[inst.symbol] || { price: inst.base, change: 0 };
+                  return (
+                    <InstrumentRow
+                      key={inst.symbol}
+                      inst={inst}
+                      onClick={() => setSelected(inst)}
+                      isSelected={inst.symbol === selected.symbol}
+                      price={feed.price}
+                      change={feed.change}
+                    />
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -193,7 +232,18 @@ export default function MarketPage() {
 
         {/* Right: chart + order form */}
         <div className="space-y-4">
-          <PriceChart inst={selected} />
+          {(() => {
+            const feed = prices[selected.symbol] || { price: selected.base, change: 0 };
+            const history = priceHistory[selected.symbol] || [];
+            return (
+              <PriceChart 
+                inst={selected} 
+                price={feed.price}
+                change={feed.change}
+                history={history}
+              />
+            );
+          })()}
           <OrderForm preselectedSymbol={selected.symbol} />
         </div>
       </div>

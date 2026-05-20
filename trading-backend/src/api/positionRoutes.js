@@ -43,6 +43,24 @@ function createPositionRoutes(positionService) {
   });
 
   /**
+   * POST /positions/:accountId/:symbol/sl-tp - Update SL/TP levels
+   */
+  router.post('/:accountId/:symbol/sl-tp', async (req, res, next) => {
+    try {
+      const { stopLossPrice, takeProfitPrice } = req.body;
+      const position = await positionService.updateSLTP(
+        req.params.accountId,
+        req.params.symbol,
+        stopLossPrice,
+        takeProfitPrice
+      );
+      res.json(position);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  /**
    * GET /positions/:accountId/:symbol - Get specific position
    */
   router.get('/:accountId/:symbol', async (req, res, next) => {

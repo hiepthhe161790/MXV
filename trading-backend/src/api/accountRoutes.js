@@ -8,7 +8,7 @@ const logger = require('../shared/infrastructure/Logger');
 const transactionSchema = new mongoose.Schema({
   transactionId: { type: String, required: true, unique: true },
   accountId:     { type: String, required: true, index: true },
-  type:          { type: String, enum: ['DEPOSIT', 'WITHDRAWAL'], required: true },
+  type:          { type: String, enum: ['DEPOSIT', 'WITHDRAWAL', 'REALIZED_PNL'], required: true },
   amount:        { type: Number, required: true },
   balanceBefore: { type: Number, required: true },
   balanceAfter:  { type: Number, required: true },

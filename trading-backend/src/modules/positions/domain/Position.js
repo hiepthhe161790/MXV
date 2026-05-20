@@ -18,6 +18,8 @@ class Position extends AggregateRoot {
     this.unrealizedPnL = 0;
     this.marginUsed = 0;
     this.leverage = 10;
+    this.stopLossPrice = null;
+    this.takeProfitPrice = null;
     this.createdAt = new Date();
     this.updatedAt = new Date();
   }
@@ -165,6 +167,23 @@ class Position extends AggregateRoot {
   }
 
   /**
+   * Update Stop Loss and Take Profit levels
+   */
+  updateSLTP(stopLossPrice, takeProfitPrice) {
+    this.stopLossPrice = stopLossPrice || null;
+    this.takeProfitPrice = takeProfitPrice || null;
+
+    this.raiseEvent(new DomainEvent(
+      this.id,
+      'PositionSLTPUpdated',
+      {
+        stopLossPrice: this.stopLossPrice,
+        takeProfitPrice: this.takeProfitPrice,
+      }
+    ));
+  }
+
+  /**
    * Calculate total P&L (realized + unrealized)
    */
   getTotalPnL() {
@@ -186,6 +205,13 @@ class Position extends AggregateRoot {
         this.unrealizedPnL = event.data.unrealizedPnL;
         this.marginUsed = event.data.marginUsed;
         if (event.data.side) this.side = event.data.side === 'BUY' ? 'LONG' : (event.data.side === 'SELL' ? 'SHORT' : event.data.side);
+        if (event.data.stopLossPrice !== undefined) this.stopLossPrice = event.data.stopLossPrice;
+        if (event.data.takeProfitPrice !== undefined) this.takeProfitPrice = event.data.takeProfitPrice;
+        break;
+
+      case 'PositionSLTPUpdated':
+        this.stopLossPrice = event.data.stopLossPrice;
+        this.takeProfitPrice = event.data.takeProfitPrice;
         break;
 
       case 'PriceUpdated':
@@ -218,6 +244,8 @@ class Position extends AggregateRoot {
       totalPnL: this.getTotalPnL(),
       marginUsed: this.marginUsed,
       leverage: this.leverage,
+      stopLossPrice: this.stopLossPrice,
+      takeProfitPrice: this.takeProfitPrice,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
       isClosed: this.quantity === 0,
