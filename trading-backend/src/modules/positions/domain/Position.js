@@ -108,9 +108,9 @@ class Position extends AggregateRoot {
       }
     }
 
-    // Margin is based on quantity × current market price / leverage
-    // This way margin reflects actual risk exposure
-    this.marginUsed = this.quantity > 0 ? roundToMoneyPrecision((this.quantity * this.currentPrice) / this.leverage) : 0;
+    // Margin is based on quantity × average entry price / leverage (MXV Standard)
+    // This way margin remains constant and deterministic during the lifecycle
+    this.marginUsed = this.quantity > 0 ? roundToMoneyPrecision((this.quantity * this.entryPrice) / this.leverage) : 0;
     
     // Recalculate unrealized P&L now that currentPrice is updated
     this.recalculatePnL();
@@ -137,7 +137,7 @@ class Position extends AggregateRoot {
     this.currentPrice = roundToMoneyPrecision(newPrice);
     this.recalculatePnL();
     
-    this.marginUsed = this.quantity > 0 ? roundToMoneyPrecision((this.quantity * this.currentPrice) / this.leverage) : 0;
+    // MXV Standard: Margin remains fixed based on entryPrice, does not change with market price.
 
     this.raiseEvent(new DomainEvent(
       this.id,

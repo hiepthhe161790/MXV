@@ -513,77 +513,6 @@ async function setupEventSubscribers() {
         // - Stays frozen when position opens
         // - Only released when position closes (see PositionClosed handler)
         // This prevents race conditions and maintains consistent accounting.
-
-        // 3. Reconciliation: ensure frozen margin matches actual open positions + pending orders
-        //    This is a SAFETY NET only, not the main mechanism
-        setTimeout(async () => {
-          try {
-            const { roundToMoneyPrecision } = require('./shared/utils/currency');
-            const accountData = await services.accountService.getAccount(order.accountId);
-            if (!accountData) return;
-
-            // Sum margin from open positions AND pending orders
-            const openPositions = await services.positionService.getOpenPositions(order.accountId);
-            const totalMarginPositions = openPositions.reduce((sum, p) => 
-              roundToMoneyPrecision(sum + (p.marginUsed || 0)), 0);
-
-            // Also check for any remaining pending orders that consume margin
-            const pendingOrders = await services.orderService.getOrdersByAccount(order.accountId);
-            const pendingMargin = pendingOrders
-              .filter(o => ['PENDING', 'PARTIALLY_FILLED'].includes(o.state))
-              .reduce((sum, o) => {
-                const unfilledQty = (o.quantity || 0) - (o.filledQuantity || 0);
-                const price = o.limitPrice || o.stopPrice || 100;
-                const margin = roundToMoneyPrecision((unfilledQty * price) / 10);
-                return roundToMoneyPrecision(sum + margin);
-              }, 0);
-
-            const expectedFrozen = roundToMoneyPrecision(totalMarginPositions + pendingMargin);
-            const currentFrozen = roundToMoneyPrecision(accountData.frozenBalance || 0);
-            const diff = roundToMoneyPrecision(currentFrozen - expectedFrozen);
-
-            // Special case: if no open positions and no pending orders, zero out frozen balance
-            if (openPositions.length === 0 && pendingOrders.length === 0 && currentFrozen > 0.01) {
-              logger.info(`Zeroing out ghost margin for account ${order.accountId}: $${currentFrozen.toFixed(4)}`);
-              await services.accountService.unfreezeBalance(
-                order.accountId, 
-                currentFrozen,
-                `Clear ghost margin (no open positions or pending orders)`
-              );
-              return;
-            }
-
-            // Only reconcile if difference is significant (> $1.00)
-            // Small float errors are normal and should not trigger reconciliation
-            const RECONCILIATION_THRESHOLD = 1.00;
-
-            if (Math.abs(diff) > RECONCILIATION_THRESHOLD) {
-              logger.warn(
-                `Margin reconciliation mismatch for account ${order.accountId}: ` +
-                `frozen=$${currentFrozen.toFixed(4)}, expected=$${expectedFrozen.toFixed(4)}, diff=$${diff.toFixed(4)}`
-              );
-
-              if (diff > RECONCILIATION_THRESHOLD) {
-                // Too much frozen - release the excess
-                await services.accountService.unfreezeBalance(
-                  order.accountId, diff,
-                  `Margin reconciliation (excess): open positions=$${totalMarginPositions.toFixed(4)}, pending=$${pendingMargin.toFixed(4)}`
-                );
-                logger.info(`Margin reconcile: released $${diff.toFixed(4)} excess for account ${order.accountId}`);
-              } else if (diff < -RECONCILIATION_THRESHOLD) {
-                // Not enough frozen - freeze the deficit
-                const deficit = Math.abs(diff);
-                await services.accountService.freezeBalance(
-                  order.accountId, deficit,
-                  `Margin reconciliation (deficit): open positions=$${totalMarginPositions.toFixed(4)}, pending=$${pendingMargin.toFixed(4)}`
-                );
-                logger.warn(`Margin reconcile: froze $${deficit.toFixed(4)} deficit for account ${order.accountId}`);
-              }
-            }
-          } catch (reconcileErr) {
-            logger.error(`Error reconciling margin after fill ${orderId}:`, reconcileErr);
-          }
-        }, 500); // 500ms delay so addTrade() write is committed
       }
     } catch (error) {
       logger.error('Error processing OrderFilled event:', error);
@@ -728,51 +657,7 @@ async function setupEventSubscribers() {
           { symbol: position.symbol, side: position.side, pnl, balanceBefore, balanceAfter }
         );
       }
-
-      // 4. Reconciliation: ensure frozen margin matches actual open positions + pending orders
-      //    This is a SELF-HEALING mechanism to clean up ghost margins or deficit.
-      setTimeout(async () => {
-        try {
-          const { roundToMoneyPrecision } = require('./shared/utils/currency');
-          const accountData = await services.accountService.getAccount(position.accountId);
-          if (!accountData) return;
-          
-          // Fetch all active positions & pending orders for the account
-          const openPositions = await services.positionService.positionRepository.findAll();
-          const accountPositions = openPositions.filter(p => p.accountId === position.accountId && p.quantity > 0);
-          const activePosMargin = accountPositions.reduce((s, p) => s + (p.marginUsed || 0), 0);
-
-          const pendingOrders = await services.orderService.orderRepository.findAll();
-          const accountOrders = pendingOrders.filter(o => o.accountId === position.accountId && ['PENDING', 'PARTIALLY_FILLED'].includes(o.state));
-          const activeOrdMargin = accountOrders.reduce((s, o) => {
-            const unfilled = o.quantity - (o.filledQuantity || 0);
-            const price = o.limitPrice || o.stopPrice || 100;
-            return s + (unfilled * price) / 10;
-          }, 0);
-
-          const expectedFrozen = roundToMoneyPrecision(activePosMargin + activeOrdMargin);
-          
-          if (Math.abs((accountData.frozenBalance || 0) - expectedFrozen) > 0.01) {
-            logger.info(`[RECONCILIATION] Self-healing frozen margin for ${position.accountId} after close. Current: ${accountData.frozenBalance}, Expected: ${expectedFrozen}`);
-            if (accountData.frozenBalance > expectedFrozen) {
-              await services.accountService.unfreezeBalance(
-                position.accountId, 
-                accountData.frozenBalance - expectedFrozen, 
-                'Margin self-healing reconciliation (excess)'
-              );
-            } else {
-              await services.accountService.freezeBalance(
-                position.accountId, 
-                expectedFrozen - accountData.frozenBalance, 
-                'Margin self-healing reconciliation (deficit)'
-              );
-            }
-          }
-        } catch (reconcileErr) {
-          logger.error(`Error in self-healing margin reconciliation after position close:`, reconcileErr);
-        }
-      }, 500);
-    } catch (error) {
+      } catch (error) {
       logger.error('Error processing PositionClosed event:', error);
     }
   }, 'position-closed-queue');
