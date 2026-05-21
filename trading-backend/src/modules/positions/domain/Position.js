@@ -1,5 +1,6 @@
 const AggregateRoot = require('../../../shared/domain/AggregateRoot');
 const DomainEvent = require('../../../shared/domain/DomainEvent');
+const { roundToMoneyPrecision, calculateMarginRequired } = require('../../../shared/utils/currency');
 
 /**
  * Position Aggregate Root
@@ -38,6 +39,17 @@ class Position extends AggregateRoot {
    * Update position with new trade
    */
   addTrade(tradeQuantity, tradePrice, tradeSide) {
+    // Input validation
+    if (!tradeQuantity || tradeQuantity <= 0) {
+      throw new Error(`Invalid trade quantity: ${tradeQuantity}`);
+    }
+    if (!tradePrice || tradePrice <= 0) {
+      throw new Error(`Invalid trade price: ${tradePrice}`);
+    }
+    if (!tradeSide || !['BUY', 'SELL', 'LONG', 'SHORT'].includes(tradeSide)) {
+      throw new Error(`Invalid trade side: ${tradeSide}`);
+    }
+
     const normalizedTradeSide = tradeSide === 'BUY' ? 'LONG' : (tradeSide === 'SELL' ? 'SHORT' : tradeSide);
 
     if (this.quantity === 0) {
@@ -46,53 +58,59 @@ class Position extends AggregateRoot {
       this.realizedPnL = 0;
       this.side = normalizedTradeSide;
       this.quantity = tradeQuantity;
-      this.entryPrice = tradePrice;
-      this.currentPrice = tradePrice; // Set current price to fill price
+      this.entryPrice = roundToMoneyPrecision(tradePrice);
+      this.currentPrice = roundToMoneyPrecision(tradePrice); // Set current price to fill price
     } else if (normalizedTradeSide === this.side) {
       // Adding to existing position
-      const newTotal = (this.quantity * this.entryPrice) + (tradeQuantity * tradePrice);
+      const newTotal = roundToMoneyPrecision((this.quantity * this.entryPrice) + (tradeQuantity * tradePrice));
       this.quantity += tradeQuantity;
-      this.entryPrice = newTotal / this.quantity;
-      this.currentPrice = tradePrice; // Update current price to latest fill price
+      this.entryPrice = roundToMoneyPrecision(newTotal / this.quantity);
+      this.currentPrice = roundToMoneyPrecision(tradePrice); // Update current price to latest fill price
     } else {
       // Closing or reversing position
       if (tradeQuantity > this.quantity) {
         // Reversal: close existing and open opposite
-        const closingPnL = this.side === 'LONG'
-          ? (tradePrice - this.entryPrice) * this.quantity
-          : (this.entryPrice - tradePrice) * this.quantity;
+        const closingPnL = roundToMoneyPrecision(
+          this.side === 'LONG'
+            ? (tradePrice - this.entryPrice) * this.quantity
+            : (this.entryPrice - tradePrice) * this.quantity
+        );
         
-        this.realizedPnL += closingPnL;
+        this.realizedPnL = roundToMoneyPrecision(this.realizedPnL + closingPnL);
         
         // Open the remaining in the opposite direction
         this.quantity = tradeQuantity - this.quantity;
-        this.entryPrice = tradePrice;
-        this.currentPrice = tradePrice;
+        this.entryPrice = roundToMoneyPrecision(tradePrice);
+        this.currentPrice = roundToMoneyPrecision(tradePrice);
         this.side = normalizedTradeSide;
       } else if (tradeQuantity === this.quantity) {
         // Exact close
-        const closingPnL = this.side === 'LONG'
-          ? (tradePrice - this.entryPrice) * this.quantity
-          : (this.entryPrice - tradePrice) * this.quantity;
+        const closingPnL = roundToMoneyPrecision(
+          this.side === 'LONG'
+            ? (tradePrice - this.entryPrice) * this.quantity
+            : (this.entryPrice - tradePrice) * this.quantity
+        );
           
-        this.realizedPnL += closingPnL;
+        this.realizedPnL = roundToMoneyPrecision(this.realizedPnL + closingPnL);
         this.quantity = 0;
-        this.currentPrice = tradePrice; // Record close price
+        this.currentPrice = roundToMoneyPrecision(tradePrice); // Record close price
       } else {
         // Partial close
-        const closingPnL = this.side === 'LONG'
-          ? (tradePrice - this.entryPrice) * tradeQuantity
-          : (this.entryPrice - tradePrice) * tradeQuantity;
+        const closingPnL = roundToMoneyPrecision(
+          this.side === 'LONG'
+            ? (tradePrice - this.entryPrice) * tradeQuantity
+            : (this.entryPrice - tradePrice) * tradeQuantity
+        );
           
-        this.realizedPnL += closingPnL;
+        this.realizedPnL = roundToMoneyPrecision(this.realizedPnL + closingPnL);
         this.quantity -= tradeQuantity;
-        this.currentPrice = tradePrice; // Update current price
+        this.currentPrice = roundToMoneyPrecision(tradePrice); // Update current price
       }
     }
 
     // Margin is based on quantity × current market price / leverage
     // This way margin reflects actual risk exposure
-    this.marginUsed = this.quantity > 0 ? (this.quantity * this.currentPrice) / this.leverage : 0;
+    this.marginUsed = this.quantity > 0 ? roundToMoneyPrecision((this.quantity * this.currentPrice) / this.leverage) : 0;
     
     // Recalculate unrealized P&L now that currentPrice is updated
     this.recalculatePnL();
@@ -116,16 +134,16 @@ class Position extends AggregateRoot {
    * Update market price and recalculate unrealized P&L
    */
   updateMarketPrice(newPrice) {
-    this.currentPrice = newPrice;
+    this.currentPrice = roundToMoneyPrecision(newPrice);
     this.recalculatePnL();
     
-    this.marginUsed = (this.quantity * this.currentPrice) / this.leverage;
+    this.marginUsed = this.quantity > 0 ? roundToMoneyPrecision((this.quantity * this.currentPrice) / this.leverage) : 0;
 
     this.raiseEvent(new DomainEvent(
       this.id,
       'PriceUpdated',
       {
-        currentPrice: newPrice,
+        currentPrice: this.currentPrice,
         unrealizedPnL: this.unrealizedPnL,
         marginUsed: this.marginUsed,
       }
@@ -142,9 +160,9 @@ class Position extends AggregateRoot {
     }
 
     if (this.side === 'LONG') {
-      this.unrealizedPnL = (this.currentPrice - this.entryPrice) * this.quantity;
+      this.unrealizedPnL = roundToMoneyPrecision((this.currentPrice - this.entryPrice) * this.quantity);
     } else if (this.side === 'SHORT') {
-      this.unrealizedPnL = (this.entryPrice - this.currentPrice) * this.quantity;
+      this.unrealizedPnL = roundToMoneyPrecision((this.entryPrice - this.currentPrice) * this.quantity);
     }
   }
 
@@ -156,16 +174,18 @@ class Position extends AggregateRoot {
       throw new Error('Position is already closed');
     }
 
-    const closingPnL = this.side === 'LONG'
-      ? (closePrice - this.entryPrice) * this.quantity
-      : (this.entryPrice - closePrice) * this.quantity;
+    const closingPnL = roundToMoneyPrecision(
+      this.side === 'LONG'
+        ? (closePrice - this.entryPrice) * this.quantity
+        : (this.entryPrice - closePrice) * this.quantity
+    );
 
     const marginBeforeClose = this.marginUsed;
 
-    this.realizedPnL += closingPnL;
+    this.realizedPnL = roundToMoneyPrecision(this.realizedPnL + closingPnL);
     this.unrealizedPnL = 0;
     this.quantity = 0;
-    this.currentPrice = closePrice;
+    this.currentPrice = roundToMoneyPrecision(closePrice);
 
     this.marginUsed = 0;
 

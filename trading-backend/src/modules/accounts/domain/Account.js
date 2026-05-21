@@ -1,5 +1,6 @@
 const AggregateRoot = require('../../../shared/domain/AggregateRoot');
 const DomainEvent = require('../../../shared/domain/DomainEvent');
+const { roundToMoneyPrecision, addMoney, subtractMoney } = require('../../../shared/utils/currency');
 
 /**
  * Account Aggregate Root
@@ -62,28 +63,32 @@ class Account extends AggregateRoot {
   }
 
   freezeBalance(amount, reason = 'Margin requirement') {
-    if (amount <= 0) throw new Error('Freeze amount must be positive');
-    if (this.getAvailableBalance() < amount) {
+    const preciseAmount = roundToMoneyPrecision(amount);
+    if (preciseAmount <= 0) throw new Error('Freeze amount must be positive');
+    if (this.getAvailableBalance() < preciseAmount) {
       throw new Error('Insufficient balance to freeze');
     }
     
+    const newFrozenBalance = roundToMoneyPrecision(this.frozenBalance + preciseAmount);
     this.raiseEvent(new DomainEvent(
       this.id,
       'BalanceFrozen',
-      { amount, reason, frozenBalance: this.frozenBalance + amount }
+      { amount: preciseAmount, reason, frozenBalance: newFrozenBalance }
     ));
   }
 
   unfreezeBalance(amount, reason = 'Margin release') {
-    if (amount <= 0) throw new Error('Unfreeze amount must be positive');
-    if (this.frozenBalance < amount) {
+    const preciseAmount = roundToMoneyPrecision(amount);
+    if (preciseAmount <= 0) throw new Error('Unfreeze amount must be positive');
+    if (this.frozenBalance < preciseAmount) {
       throw new Error('Cannot unfreeze more than frozen amount');
     }
     
+    const newFrozenBalance = roundToMoneyPrecision(this.frozenBalance - preciseAmount);
     this.raiseEvent(new DomainEvent(
       this.id,
       'BalanceUnfrozen',
-      { amount, reason, frozenBalance: this.frozenBalance - amount }
+      { amount: preciseAmount, reason, frozenBalance: newFrozenBalance }
     ));
   }
 
@@ -99,24 +104,24 @@ class Account extends AggregateRoot {
     switch (event.eventType) {
       case 'AccountCreated':
         this.email = event.data.email;
-        this.balance = event.data.balance || 0;
+        this.balance = roundToMoneyPrecision(event.data.balance || 0);
         this.frozenBalance = 0;
         break;
       
       case 'BalanceDeposited':
-        this.balance += event.data.amount;
+        this.balance = roundToMoneyPrecision(this.balance + event.data.amount);
         break;
       
       case 'BalanceWithdrawn':
-        this.balance -= event.data.amount;
+        this.balance = roundToMoneyPrecision(this.balance - event.data.amount);
         break;
       
       case 'BalanceFrozen':
-        this.frozenBalance += event.data.amount;
+        this.frozenBalance = roundToMoneyPrecision(this.frozenBalance + event.data.amount);
         break;
       
       case 'BalanceUnfrozen':
-        this.frozenBalance -= event.data.amount;
+        this.frozenBalance = roundToMoneyPrecision(this.frozenBalance - event.data.amount);
         break;
     }
   }
