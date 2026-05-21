@@ -38,6 +38,8 @@ export interface Position {
   marginUsed: number;
   leverage: number;
   status: string;
+  stopLossPrice?: number | null;
+  takeProfitPrice?: number | null;
 }
 
 export interface Transaction {
@@ -94,6 +96,11 @@ export const tradingService = {
 
   closePosition: async (accountId: string, symbol: string, closePrice: number): Promise<any> => {
     const response = await api.post(`/positions/${accountId}/${symbol}/close`, { closePrice });
+    return unwrapResponse<any>(response);
+  },
+
+  updateSLTP: async (accountId: string, symbol: string, stopLossPrice: number | null, takeProfitPrice: number | null): Promise<any> => {
+    const response = await api.post(`/positions/${accountId}/${symbol}/sl-tp`, { stopLossPrice, takeProfitPrice });
     return unwrapResponse<any>(response);
   },
 
