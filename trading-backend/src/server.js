@@ -515,12 +515,14 @@ async function setupEventSubscribers() {
         //    This is a SAFETY NET only, not the main mechanism
         setTimeout(async () => {
           try {
+            const { roundToMoneyPrecision } = require('./shared/utils/currency');
             const accountData = await services.accountService.getAccount(order.accountId);
             if (!accountData) return;
 
             // Sum margin from open positions AND pending orders
             const openPositions = await services.positionService.getOpenPositions(order.accountId);
-            const totalMarginPositions = openPositions.reduce((sum, p) => sum + (p.marginUsed || 0), 0);
+            const totalMarginPositions = openPositions.reduce((sum, p) => 
+              roundToMoneyPrecision(sum + (p.marginUsed || 0)), 0);
 
             // Also check for any remaining pending orders that consume margin
             const pendingOrders = await services.orderService.getOrdersByAccount(order.accountId);
@@ -529,12 +531,13 @@ async function setupEventSubscribers() {
               .reduce((sum, o) => {
                 const unfilledQty = (o.quantity || 0) - (o.filledQuantity || 0);
                 const price = o.limitPrice || o.stopPrice || 100;
-                return sum + (unfilledQty * price) / 10;
+                const margin = roundToMoneyPrecision((unfilledQty * price) / 10);
+                return roundToMoneyPrecision(sum + margin);
               }, 0);
 
-            const expectedFrozen = totalMarginPositions + pendingMargin;
-            const currentFrozen = accountData.frozenBalance || 0;
-            const diff = currentFrozen - expectedFrozen;
+            const expectedFrozen = roundToMoneyPrecision(totalMarginPositions + pendingMargin);
+            const currentFrozen = roundToMoneyPrecision(accountData.frozenBalance || 0);
+            const diff = roundToMoneyPrecision(currentFrozen - expectedFrozen);
 
             if (Math.abs(diff) > 0.01) {
               logger.warn(
@@ -637,12 +640,29 @@ async function setupEventSubscribers() {
       
       if (!position) return;
       
-      // Calculate released margin based on last known state before close, 
-      // but marginUsed is passed in event.data.marginUsed from our recent changes!
-      const marginReleased = event.data.marginUsed || 0;
+      // Get the margin that was recorded when position closed
+      const marginToRelease = event.data.marginUsed || 0;
 
-      if (marginReleased > 0) {
-        await services.accountService.unfreezeBalance(position.accountId, marginReleased, `Close position ${position.symbol}`);
+      if (marginToRelease > 0) {
+        try {
+          // Get current account state to check actual frozen balance
+          const account = await services.accountService.getAccount(position.accountId);
+          const currentFrozen = account?.frozenBalance || 0;
+          
+          // Only unfreeze what's actually frozen (safety guard against reconciliation adjustments)
+          const actualMarginToRelease = Math.min(marginToRelease, currentFrozen);
+          
+          if (actualMarginToRelease > 0) {
+            await services.accountService.unfreezeBalance(
+              position.accountId, 
+              actualMarginToRelease, 
+              `Close position ${position.symbol}`
+            );
+          }
+        } catch (unfreezeErr) {
+          // If unfreeze fails, log it but don't crash - PnL still needs to be applied
+          logger.warn(`Warning: Could not unfreeze margin for position ${positionId}: ${unfreezeErr.message}`);
+        }
       }
       
       if (pnl !== undefined) {
