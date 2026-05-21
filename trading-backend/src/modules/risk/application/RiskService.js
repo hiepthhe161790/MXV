@@ -5,9 +5,10 @@ const logger = require('../../../shared/infrastructure/Logger');
  * Risk Management Service - Application Layer
  */
 class RiskService {
-  constructor(eventBus) {
+  constructor(eventBus, cache) {
     this.eventBus = eventBus;
-    this.riskEngine = new RiskEngine(eventBus, logger);
+    this.cache = cache;
+    this.riskEngine = new RiskEngine(eventBus, cache, logger);
   }
 
   /**

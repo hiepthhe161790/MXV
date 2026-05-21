@@ -10,13 +10,26 @@ const RiskRules = {
   LIQUIDATION_THRESHOLD: 0.05, // 5% triggers auto liquidation
 };
 
+const BASE_PRICES = {
+  'GCZ24': 2150,
+  'SIZ24': 25.5,
+  'CLZ24': 78.5,
+  'NGF25': 2.8,
+  'HGZ24': 3.95,
+  'ZCZ24': 470,
+  'ZSF25': 1020,
+  'KCZ24': 185,
+};
+
+
 /**
  * Risk Engine Service
  * Validates orders against risk parameters
  */
 class RiskEngine {
-  constructor(eventBus, logger) {
+  constructor(eventBus, cache, logger) {
     this.eventBus = eventBus;
+    this.cache = cache;
     this.logger = logger;
   }
 
@@ -26,11 +39,32 @@ class RiskEngine {
    */
   async validateOrder(order, account, positions) {
     try {
+      // 1. Resolve price from cache first, then fallback to BASE_PRICES
+      let price = order.limitPrice || order.stopPrice;
+      if (!price) {
+        if (this.cache) {
+          try {
+            const cachedPrice = await this.cache.get(`market:price:${order.symbol}`);
+            if (cachedPrice) {
+              price = Number(cachedPrice);
+            }
+          } catch (cacheErr) {
+            this.logger.error(`Error reading cached price for ${order.symbol}:`, cacheErr.message);
+          }
+        }
+      }
+      if (!price) {
+        price = BASE_PRICES[order.symbol];
+        if (!price) {
+          throw new Error(`Cannot validate order: missing price for ${order.symbol}`);
+        }
+      }
+
       const validations = [
-        this.checkSufficientMargin(order, account),
-        this.checkExposureLimit(order, account, positions),
+        this.checkSufficientMargin(order, account, price),
+        this.checkExposureLimit(order, account, positions, price),
         this.checkPositionSize(order, positions),
-        this.checkMarginRequirement(order, account),
+        this.checkMarginRequirement(order, account, price),
       ];
 
       for (const validation of validations) {
@@ -41,8 +75,9 @@ class RiskEngine {
         }
       }
 
-      this.logger.info(`Order passed risk validation: ${order.id}`);
-      return { isValid: true, marginRequired: this.calculateMarginRequired(order) };
+      const marginRequired = this.calculateMarginRequired(order, price);
+      this.logger.info(`Order passed risk validation: ${order.id}. Resolved price: ${price}, margin required: ${marginRequired}`);
+      return { isValid: true, marginRequired };
     } catch (error) {
       this.logger.error('Risk validation failed:', error);
       throw error;
@@ -52,8 +87,8 @@ class RiskEngine {
   /**
    * Check if account has sufficient margin
    */
-  checkSufficientMargin(order, account) {
-    const marginRequired = this.calculateMarginRequired(order);
+  checkSufficientMargin(order, account, price) {
+    const marginRequired = this.calculateMarginRequired(order, price);
     const availableBalance = account.balance - account.frozenBalance;
 
     if (availableBalance < marginRequired) {
@@ -70,9 +105,9 @@ class RiskEngine {
   /**
    * Check if order would exceed exposure limit
    */
-  checkExposureLimit(order, account, positions) {
+  checkExposureLimit(order, account, positions, price) {
     const currentExposure = this.calculateCurrentExposure(positions);
-    const orderExposure = this.calculateOrderExposure(order);
+    const orderExposure = this.calculateOrderExposure(order, price);
     const totalExposure = currentExposure + orderExposure;
 
     if (totalExposure > RiskRules.MAX_EXPOSURE_PER_ACCOUNT) {
@@ -108,8 +143,8 @@ class RiskEngine {
   /**
    * Check minimum margin requirement
    */
-  checkMarginRequirement(order, account) {
-    const marginRequired = this.calculateMarginRequired(order);
+  checkMarginRequirement(order, account, price) {
+    const marginRequired = this.calculateMarginRequired(order, price);
     const equity = account.balance;
     const marginRatio = (account.frozenBalance + marginRequired) / equity;
 
@@ -127,8 +162,12 @@ class RiskEngine {
   /**
    * Calculate margin required for order
    */
-  calculateMarginRequired(order) {
-    const orderValue = order.quantity * (order.limitPrice || order.stopPrice || 100);
+  calculateMarginRequired(order, price = null) {
+    let resolvedPrice = price || order.limitPrice || order.stopPrice || BASE_PRICES[order.symbol];
+    if (!resolvedPrice || resolvedPrice <= 0) {
+      throw new Error(`Cannot calculate margin: missing valid price for ${order.symbol}`);
+    }
+    const orderValue = order.quantity * resolvedPrice;
     const margin = orderValue / RiskRules.MAX_LEVERAGE;
     return margin;
   }
@@ -146,9 +185,12 @@ class RiskEngine {
   /**
    * Calculate exposure from new order
    */
-  calculateOrderExposure(order) {
-    const price = order.limitPrice || order.stopPrice || 100;
-    return order.quantity * price;
+  calculateOrderExposure(order, price = null) {
+    let resolvedPrice = price || order.limitPrice || order.stopPrice || BASE_PRICES[order.symbol];
+    if (!resolvedPrice || resolvedPrice <= 0) {
+      throw new Error(`Cannot calculate exposure: missing valid price for ${order.symbol}`);
+    }
+    return order.quantity * resolvedPrice;
   }
 
   /**

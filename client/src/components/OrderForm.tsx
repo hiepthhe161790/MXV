@@ -20,19 +20,23 @@ export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: s
   const { account } = useAuthStore();
   const { prices } = useMarketSocket();
   const { orders, setOrders } = useTradingStore();
-  
+
+  // Track if user has manually edited the limit price (to avoid overwriting their input)
+  const [userEditedPrice, setUserEditedPrice] = useState(false);
+
   const [formData, setFormData] = useState({
     symbol: preselectedSymbol || 'GCZ24',
     side: 'BUY',
     quantity: 1,
     orderType: 'LIMIT',
+    // Start with base price; live price will override once WebSocket delivers it
     limitPrice: BASE_PRICES[preselectedSymbol || 'GCZ24'],
     stopPrice: '',
   });
 
   const [loading, setLoading] = useState(false);
 
-  // Sync when preselectedSymbol changes
+  // Sync when preselectedSymbol changes (user clicked a different instrument in the table)
   useEffect(() => {
     if (preselectedSymbol) {
       const livePrice = prices[preselectedSymbol]?.price ?? BASE_PRICES[preselectedSymbol] ?? 0;
@@ -41,8 +45,20 @@ export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: s
         symbol: preselectedSymbol,
         limitPrice: livePrice,
       }));
+      // Reset user-edit flag when symbol changes so live price can auto-populate
+      setUserEditedPrice(false);
     }
   }, [preselectedSymbol]);
+
+  // Auto-update limitPrice when the live price for the selected symbol first arrives from WebSocket
+  // Only fires if user hasn't manually changed the price
+  useEffect(() => {
+    if (userEditedPrice) return;
+    const livePrice = prices[formData.symbol]?.price;
+    if (livePrice && livePrice > 0) {
+      setFormData((prev) => ({ ...prev, limitPrice: livePrice }));
+    }
+  }, [prices[formData.symbol]?.price]);
 
   // Handle manual dropdown selection
   const handleSymbolChange = (symbol: string) => {
@@ -52,6 +68,7 @@ export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: s
       symbol,
       limitPrice: livePrice,
     }));
+    setUserEditedPrice(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -64,6 +81,9 @@ export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: s
     setLoading(true);
 
     try {
+      // Generate unique idempotency key to prevent duplicate orders
+      const idempotencyKey = `${account._id}-${formData.symbol}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
       const payload = {
         accountId: account._id,
         symbol: formData.symbol,
@@ -78,11 +98,21 @@ export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: s
           formData.orderType === 'STOP' || formData.orderType === 'STOP_LIMIT'
             ? Number(formData.stopPrice)
             : undefined,
+        idempotencyKey,
       };
 
       const order = await tradingService.createOrder(payload);
       toast.success('Order created successfully');
       setOrders([...(orders || []), order]);
+      // Reset form after successful order
+      setFormData({
+        symbol: preselectedSymbol || 'GCZ24',
+        side: 'BUY',
+        quantity: 1,
+        orderType: 'LIMIT',
+        limitPrice: BASE_PRICES[preselectedSymbol || 'GCZ24'],
+        stopPrice: '',
+      });
     } catch (error: any) {
       const message = error.response?.data?.error || error.message || 'Failed to create order';
       toast.error(message);
@@ -171,9 +201,10 @@ export default function OrderForm({ preselectedSymbol }: { preselectedSymbol?: s
               type="number"
               step="any"
               value={formData.limitPrice}
-              onChange={(e) =>
-                setFormData({ ...formData, limitPrice: parseFloat(e.target.value) })
-              }
+              onChange={(e) => {
+                setUserEditedPrice(true);
+                setFormData({ ...formData, limitPrice: parseFloat(e.target.value) });
+              }}
               className="input"
               placeholder="Enter limit price"
             />

@@ -138,7 +138,7 @@ async function initializeServices() {
       services.cache
     );
 
-    services.riskService = new RiskService(services.eventBus);
+    services.riskService = new RiskService(services.eventBus, services.cache);
 
     services.positionService = new PositionService(
       services.positionRepository,
@@ -146,7 +146,7 @@ async function initializeServices() {
       services.cache
     );
 
-    services.matchingEngine = new MatchingEngine(services.eventBus);
+    services.matchingEngine = new MatchingEngine(services.eventBus, services.cache);
 
     services.settlementService = new SettlementService(
       services.settlementRepository,
@@ -479,29 +479,102 @@ async function setupEventSubscribers() {
     }
   }, 'trade-executed-queue');
 
-  // Order filled event - update positions
+  // Order filled event - update positions and release frozen margin
   await services.eventBus.subscribe('OrderFilled', async (event) => {
     try {
       const orderId = event.data.orderId || event.aggregateId;
       if (!orderId) return;
       const order = await services.orderService.getOrder(orderId);
-      if (!order) return; // Ignore if order not found
+      if (!order) return;
 
       if (order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED') {
-        await services.positionService.addTrade(
-          order.accountId,
-          order.symbol,
-          order.side,
-          event.data.filledQuantity,
-          event.data.price
-        );
+        let positionUpdated = false;
+        let marginReleased = false;
+
+        // 1. Update position with the new trade (must succeed for consistency)
+        try {
+          await services.positionService.addTrade(
+            order.accountId,
+            order.symbol,
+            order.side,
+            event.data.filledQuantity,
+            event.data.price
+          );
+          positionUpdated = true;
+          logger.info(`Position updated for order ${orderId}: ${event.data.filledQuantity}@${event.data.price}`);
+        } catch (positionErr) {
+          logger.error(`CRITICAL: Position update failed for order ${orderId}:`, positionErr);
+          // Don't proceed to margin release if position failed - try reconciliation later
+        }
+
+        // 2. Release frozen margin ONLY if position was successfully updated
+        //    Release based on UNFILLED quantity (remaining not filled yet)
+        if (positionUpdated) {
+          try {
+            const unfilledQty = order.quantity - (event.data.filledQuantity || 0);
+            const fillPrice = event.data.price;
+            if (!fillPrice || fillPrice <= 0) {
+              logger.warn(`OrderFilled event has invalid price ${fillPrice}, using order prices`);
+            }
+            const finalPrice = fillPrice || order.limitPrice || order.stopPrice;
+            if (!finalPrice || finalPrice <= 0) {
+              logger.error(`Cannot determine margin release price for order ${orderId}`);
+              throw new Error(`Missing valid price for order ${orderId}`);
+            }
+
+            // Release margin for quantity that was JUST FILLED, not remaining
+            const marginToRelease = (event.data.filledQuantity * finalPrice) / 10; // leverage = 10
+
+            if (marginToRelease > 0) {
+              await services.accountService.unfreezeBalance(
+                order.accountId,
+                marginToRelease,
+                `Release margin for ${event.data.filledQuantity} filled of order ${orderId}`
+              );
+              marginReleased = true;
+              logger.info(`Margin released $${marginToRelease.toFixed(4)} for order ${orderId} (${event.data.filledQuantity}@${finalPrice})`);
+            }
+          } catch (releaseErr) {
+            logger.error(`Error releasing margin after fill ${orderId}:`, releaseErr);
+            // Don't throw - let reconciliation handle it
+          }
+        }
+
+        // 3. Delayed full reconciliation — catches any remaining discrepancy
+        //    after addTrade() has persisted to DB.
+        setTimeout(async () => {
+          try {
+            const accountData = await services.accountService.getAccount(order.accountId);
+            if (!accountData) return;
+            const openPositions = await services.positionService.getOpenPositions(order.accountId);
+            const totalMarginRequired = openPositions.reduce((sum, p) => sum + (p.marginUsed || 0), 0);
+            const currentFrozen = accountData.frozenBalance || 0;
+            const diff = currentFrozen - totalMarginRequired;
+
+            if (diff > 0.01) {
+              await services.accountService.unfreezeBalance(
+                order.accountId, diff,
+                `Margin reconciliation after fill of order ${orderId}`
+              );
+              logger.info(`Margin reconcile: released $${diff.toFixed(4)} ghost margin for account ${order.accountId}`);
+            } else if (diff < -0.01) {
+              await services.accountService.freezeBalance(
+                order.accountId, Math.abs(diff),
+                `Margin reconciliation after fill of order ${orderId}`
+              );
+              logger.info(`Margin reconcile: froze $${Math.abs(diff).toFixed(4)} deficit for account ${order.accountId}`);
+            }
+          } catch (reconcileErr) {
+            logger.error(`Error reconciling margin after fill ${orderId}:`, reconcileErr);
+          }
+        }, 500); // 500ms delay so addTrade() write is committed
       }
     } catch (error) {
       logger.error('Error processing OrderFilled event:', error);
     }
   }, 'order-filled-queue');
 
-  // Order Cancelled / Rejected - Unfreeze margin
+  // Order Cancelled / Rejected - Unfreeze margin + remove from matching engine book
   const unfreezeOrderMargin = async (event) => {
     try {
       const orderId = event.data.orderId || event.aggregateId;
@@ -509,10 +582,37 @@ async function setupEventSubscribers() {
       const order = await services.orderService.getOrder(orderId);
       if (!order) return;
 
+      // IMPORTANT: Remove from matching engine in-memory order book to prevent ghost matches
+      try {
+        await services.matchingEngine.cancelOrder(orderId, order.symbol);
+      } catch (e) {
+        logger.warn(`Could not remove order ${orderId} from matching engine book: ${e.message}`);
+      }
+
       const unfilledQuantity = order.quantity - (order.filledQuantity || 0);
       if (unfilledQuantity <= 0) return;
 
-      const price = order.limitPrice || order.stopPrice || 100;
+      // Resolve real price - use limitPrice, then Redis cache, then BASE_PRICES, then throw
+      let price = order.limitPrice || order.stopPrice;
+      if (!price && services.cache) {
+        try {
+          const cached = await services.cache.get(`market:price:${order.symbol}`);
+          if (cached) price = Number(cached);
+        } catch (e) { /* ignore */ }
+      }
+      // Use BASE_PRICES as last resort, not hardcoded 100
+      if (!price) {
+        const BASE_PRICES = {
+          'GCZ24': 2150, 'SIZ24': 25.5, 'CLZ24': 78.5, 'NGF25': 2.8,
+          'HGZ24': 3.95, 'ZCZ24': 470, 'ZSF25': 1020, 'KCZ24': 185,
+        };
+        price = BASE_PRICES[order.symbol];
+        if (!price) {
+          logger.warn(`Could not resolve price for ${order.symbol} when unfreezing order ${orderId}`);
+          price = 0;
+        }
+      }
+
       const marginToRelease = (unfilledQuantity * price) / 10;
 
       if (marginToRelease > 0) {
@@ -765,7 +865,8 @@ async function startServer() {
     priceFeedService = new PriceFeedService(
       services.positionService,
       services.matchingEngine,
-      webSocketServer
+      webSocketServer,
+      services.cache
     );
     priceFeedService.start(10000); // Sync every 10 seconds
 
