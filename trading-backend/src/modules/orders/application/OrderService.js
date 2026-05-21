@@ -23,7 +23,7 @@ class OrderService {
       if (idempotencyKey) {
         const existing = await this.orderRepository.findByIdempotencyKey(idempotencyKey);
         if (existing) {
-          logger.info(`Order already submitted (idempotency): ${idempotencyKey}`);
+          logger.info(`[FLOW-DEBUG] [1-ORDER_DUPLICATE] Order already submitted (idempotency): ${idempotencyKey}`);
           return existing;
         }
       }
@@ -54,7 +54,7 @@ class OrderService {
       // Cache
       await this.cache.set(`order:${orderId}`, order.toJSON());
       
-      logger.info(`Order placed: ${orderId} - ${accountId} ${side} ${quantity} ${symbol}`);
+      logger.info(`[FLOW-DEBUG] [1-ORDER_PLACED] Order created: ${orderId} for Account: ${accountId}, Symbol: ${symbol}, Side: ${side}, Qty: ${quantity}, Type: ${orderType}, LimitPrice: ${limitPrice || 'N/A'}, StopPrice: ${stopPrice || 'N/A'}`);
       return order.toJSON();
     } catch (error) {
       logger.error('Error placing order:', error);
@@ -85,7 +85,7 @@ class OrderService {
       
       await this.cache.set(`order:${orderId}`, order.toJSON());
       
-      logger.info(`Order sent: ${orderId}`);
+      logger.info(`[FLOW-DEBUG] [1-ORDER_SENT] Order sent to Matching Engine: ${orderId} (${order.side} ${order.quantity} ${order.symbol})`);
       return order.toJSON();
     } catch (error) {
       logger.error('Error sending order:', error);
@@ -106,6 +106,9 @@ class OrderService {
       if (!orderData) throw new Error('Order not found');
       
       const order = this.reconstructOrder(orderData);
+      
+      logger.info(`[FLOW-DEBUG] [3-ORDER_FILL_PROCESS] Processing fill for Order: ${orderId} (${order.symbol} ${order.side}). Filled Qty: ${filledQuantity} @ Price: ${price}. Current order cumulative filled: ${order.filledQuantity}/${order.quantity}, state: ${order.state}`);
+      
       order.fill(filledQuantity, price);
       
       await this.orderRepository.save(order);
@@ -116,7 +119,7 @@ class OrderService {
       
       await this.cache.set(`order:${orderId}`, order.toJSON());
       
-      logger.info(`Order filled: ${orderId} - ${filledQuantity}@${price}`);
+      logger.info(`[FLOW-DEBUG] [3-ORDER_FILLED] Order ${orderId} updated to state: ${order.state}. Cumulative filled: ${order.filledQuantity}/${order.quantity}`);
       return order.toJSON();
     } catch (error) {
       logger.error('Error filling order:', error);

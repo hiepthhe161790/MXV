@@ -468,6 +468,7 @@ async function setupEventSubscribers() {
   await services.eventBus.subscribe('TradeExecuted', async (event) => {
     try {
       const trade = event.data;
+      logger.info(`[FLOW-DEBUG] [3-TRADE_EVENT_RECEIVED] TradeExecuted event received: ${event.aggregateId}. Qty: ${trade.quantity} @ Price: ${trade.price}`);
       if (trade.buyOrderId && !trade.buyOrderId.startsWith('mock-liq-')) {
         await services.orderService.fillOrder(trade.buyOrderId, trade.quantity, trade.price);
       }
@@ -488,6 +489,8 @@ async function setupEventSubscribers() {
       const order = await services.orderService.getOrder(orderId);
       if (!order) return;
 
+      logger.info(`[FLOW-DEBUG] [4-ORDER_FILLED_EVENT] OrderFilled event received for Order: ${orderId}, Symbol: ${order.symbol}, Qty: ${event.data.filledQuantity} @ Price: ${event.data.price}. Updating position...`);
+
       if (order.state === 'FILLED' || order.state === 'PARTIALLY_FILLED') {
         // 1. Update position with the new trade (must succeed for consistency)
         try {
@@ -498,7 +501,7 @@ async function setupEventSubscribers() {
             event.data.filledQuantity,
             event.data.price
           );
-          logger.info(`Position updated for order ${orderId}: ${event.data.filledQuantity}@${event.data.price}`);
+          logger.info(`[FLOW-DEBUG] [4-ORDER_FILLED_EVENT_DONE] Position updated successfully for Order ${orderId}: added trade Qty: ${event.data.filledQuantity} @ Price: ${event.data.price}`);
         } catch (positionErr) {
           logger.error(`CRITICAL: Position update failed for order ${orderId}:`, positionErr);
           throw positionErr;
@@ -539,20 +542,35 @@ async function setupEventSubscribers() {
             const currentFrozen = roundToMoneyPrecision(accountData.frozenBalance || 0);
             const diff = roundToMoneyPrecision(currentFrozen - expectedFrozen);
 
-            if (Math.abs(diff) > 0.01) {
+            // Special case: if no open positions and no pending orders, zero out frozen balance
+            if (openPositions.length === 0 && pendingOrders.length === 0 && currentFrozen > 0.01) {
+              logger.info(`Zeroing out ghost margin for account ${order.accountId}: $${currentFrozen.toFixed(4)}`);
+              await services.accountService.unfreezeBalance(
+                order.accountId, 
+                currentFrozen,
+                `Clear ghost margin (no open positions or pending orders)`
+              );
+              return;
+            }
+
+            // Only reconcile if difference is significant (> $1.00)
+            // Small float errors are normal and should not trigger reconciliation
+            const RECONCILIATION_THRESHOLD = 1.00;
+
+            if (Math.abs(diff) > RECONCILIATION_THRESHOLD) {
               logger.warn(
                 `Margin reconciliation mismatch for account ${order.accountId}: ` +
                 `frozen=$${currentFrozen.toFixed(4)}, expected=$${expectedFrozen.toFixed(4)}, diff=$${diff.toFixed(4)}`
               );
 
-              if (diff > 0.01) {
+              if (diff > RECONCILIATION_THRESHOLD) {
                 // Too much frozen - release the excess
                 await services.accountService.unfreezeBalance(
                   order.accountId, diff,
                   `Margin reconciliation (excess): open positions=$${totalMarginPositions.toFixed(4)}, pending=$${pendingMargin.toFixed(4)}`
                 );
                 logger.info(`Margin reconcile: released $${diff.toFixed(4)} excess for account ${order.accountId}`);
-              } else if (diff < -0.01) {
+              } else if (diff < -RECONCILIATION_THRESHOLD) {
                 // Not enough frozen - freeze the deficit
                 const deficit = Math.abs(diff);
                 await services.accountService.freezeBalance(
@@ -579,6 +597,8 @@ async function setupEventSubscribers() {
       if (!orderId) return;
       const order = await services.orderService.getOrder(orderId);
       if (!order) return;
+
+      logger.info(`[FLOW-DEBUG] [ORDER-UNFREEZE-START] Order ${event.eventType} event received for Order: ${orderId}. Releasing unused margin.`);
 
       // IMPORTANT: Remove from matching engine in-memory order book to prevent ghost matches
       try {
@@ -614,6 +634,7 @@ async function setupEventSubscribers() {
       const marginToRelease = (unfilledQuantity * price) / 10;
 
       if (marginToRelease > 0) {
+        logger.info(`[FLOW-DEBUG] [ORDER-UNFREEZE-DONE] Releasing margin: $${marginToRelease.toFixed(4)} for Account: ${order.accountId} (Order ${orderId})`);
         await services.accountService.unfreezeBalance(
           order.accountId, 
           marginToRelease, 
@@ -643,6 +664,8 @@ async function setupEventSubscribers() {
       // Get the margin that was recorded when position closed
       const marginToRelease = event.data.marginUsed || 0;
 
+      logger.info(`[FLOW-DEBUG] [5-POSITION_CLOSED_EVENT] PositionClosed event received for Position: ${positionId}, Symbol: ${position.symbol}, RealizedPnL: $${pnl.toFixed(4)}, Margin to release: $${marginToRelease.toFixed(4)}`);
+
       if (marginToRelease > 0) {
         try {
           // Get current account state to check actual frozen balance
@@ -653,6 +676,7 @@ async function setupEventSubscribers() {
           const actualMarginToRelease = Math.min(marginToRelease, currentFrozen);
           
           if (actualMarginToRelease > 0) {
+            logger.info(`[FLOW-DEBUG] [5-CLOSE_MARGIN_RELEASE] Releasing position margin: $${actualMarginToRelease.toFixed(4)} (originally recorded: $${marginToRelease.toFixed(4)}) for Account: ${position.accountId}`);
             await services.accountService.unfreezeBalance(
               position.accountId, 
               actualMarginToRelease, 
@@ -679,6 +703,8 @@ async function setupEventSubscribers() {
           balanceAfter = balanceBefore - Math.abs(pnl);
         }
 
+        logger.info(`[FLOW-DEBUG] [5-CLOSE_PNL_APPLIED] Realized PnL of $${pnl.toFixed(4)} applied to Account: ${position.accountId}. Balance before: $${balanceBefore.toFixed(4)}, after: $${balanceAfter.toFixed(4)}`);
+
         // Create transaction history entry for realized P&L
         await TransactionModel.create({
           transactionId: 'TXN-' + uuidv4().slice(0, 8).toUpperCase(),
@@ -702,6 +728,50 @@ async function setupEventSubscribers() {
           { symbol: position.symbol, side: position.side, pnl, balanceBefore, balanceAfter }
         );
       }
+
+      // 4. Reconciliation: ensure frozen margin matches actual open positions + pending orders
+      //    This is a SELF-HEALING mechanism to clean up ghost margins or deficit.
+      setTimeout(async () => {
+        try {
+          const { roundToMoneyPrecision } = require('./shared/utils/currency');
+          const accountData = await services.accountService.getAccount(position.accountId);
+          if (!accountData) return;
+          
+          // Fetch all active positions & pending orders for the account
+          const openPositions = await services.positionService.positionRepository.findAll();
+          const accountPositions = openPositions.filter(p => p.accountId === position.accountId && p.quantity > 0);
+          const activePosMargin = accountPositions.reduce((s, p) => s + (p.marginUsed || 0), 0);
+
+          const pendingOrders = await services.orderService.orderRepository.findAll();
+          const accountOrders = pendingOrders.filter(o => o.accountId === position.accountId && ['PENDING', 'PARTIALLY_FILLED'].includes(o.state));
+          const activeOrdMargin = accountOrders.reduce((s, o) => {
+            const unfilled = o.quantity - (o.filledQuantity || 0);
+            const price = o.limitPrice || o.stopPrice || 100;
+            return s + (unfilled * price) / 10;
+          }, 0);
+
+          const expectedFrozen = roundToMoneyPrecision(activePosMargin + activeOrdMargin);
+          
+          if (Math.abs((accountData.frozenBalance || 0) - expectedFrozen) > 0.01) {
+            logger.info(`[RECONCILIATION] Self-healing frozen margin for ${position.accountId} after close. Current: ${accountData.frozenBalance}, Expected: ${expectedFrozen}`);
+            if (accountData.frozenBalance > expectedFrozen) {
+              await services.accountService.unfreezeBalance(
+                position.accountId, 
+                accountData.frozenBalance - expectedFrozen, 
+                'Margin self-healing reconciliation (excess)'
+              );
+            } else {
+              await services.accountService.freezeBalance(
+                position.accountId, 
+                expectedFrozen - accountData.frozenBalance, 
+                'Margin self-healing reconciliation (deficit)'
+              );
+            }
+          }
+        } catch (reconcileErr) {
+          logger.error(`Error in self-healing margin reconciliation after position close:`, reconcileErr);
+        }
+      }, 500);
     } catch (error) {
       logger.error('Error processing PositionClosed event:', error);
     }

@@ -70,7 +70,7 @@ class AccountService {
       // Update cache
       await this.cache.set(`account:${accountId}`, account.toJSON());
       
-      logger.info(`Deposit: ${accountId} - Amount: ${amount}`);
+      logger.info(`[FLOW-DEBUG] [MONEY-DEPOSIT] Account: ${accountId} - Deposited: $${amount.toFixed(4)} (Reason: ${reason}). Balance before: $${(accountData.balance || 0).toFixed(4)}, after: $${account.balance.toFixed(4)}`);
       return account.toJSON();
     } catch (error) {
       logger.error('Error depositing funds:', error);
@@ -105,7 +105,7 @@ class AccountService {
       
       await this.cache.set(`account:${accountId}`, account.toJSON());
       
-      logger.info(`Withdrawal: ${accountId} - Amount: ${amount}`);
+      logger.info(`[FLOW-DEBUG] [MONEY-WITHDRAW] Account: ${accountId} - Withdrew: $${amount.toFixed(4)} (Reason: ${reason}). Balance before: $${(accountData.balance || 0).toFixed(4)}, after: $${account.balance.toFixed(4)}`);
       return account.toJSON();
     } catch (error) {
       logger.error('Error withdrawing funds:', error);
@@ -140,7 +140,7 @@ class AccountService {
       
       await this.cache.set(`account:${accountId}`, account.toJSON());
       
-      logger.info(`Balance frozen: ${accountId} - Amount: ${amount}`);
+      logger.info(`[FLOW-DEBUG] [MONEY-FREEZE] Account: ${accountId} - Froze: $${amount.toFixed(4)} (Reason: ${reason}). Frozen before: $${(accountData.frozenBalance || 0).toFixed(4)}, after: $${account.frozenBalance.toFixed(4)}`);
       return account.toJSON();
     } catch (error) {
       logger.error('Error freezing balance:', error);
@@ -175,7 +175,7 @@ class AccountService {
       
       await this.cache.set(`account:${accountId}`, account.toJSON());
       
-      logger.info(`Balance unfrozen: ${accountId} - Amount: ${amount}`);
+      logger.info(`[FLOW-DEBUG] [MONEY-UNFREEZE] Account: ${accountId} - Unfroze: $${amount.toFixed(4)} (Reason: ${reason}). Frozen before: $${(accountData.frozenBalance || 0).toFixed(4)}, after: $${account.frozenBalance.toFixed(4)}`);
       return account.toJSON();
     } catch (error) {
       logger.error('Error unfreezing balance:', error);
