@@ -59,15 +59,19 @@ function createOrderRoutes(orderService, riskService, matchingEngine, accountSer
       const riskValidation = await riskService.validateOrderForPlacement(mockOrder, account, positions);
 
       if (!riskValidation.isValid) {
+        logger.warn(`[FLOW-DEBUG] [1-ORDER_REJECTED] Account: ${accountId} rejected by risk rules: ${riskValidation.reason}`);
         return res.status(400).json({ error: riskValidation.reason, code: riskValidation.code });
       }
 
+      const marginRequired = riskValidation.marginRequired || 0;
+      logger.info(`[FLOW-DEBUG] [1-ORDER_START] Account: ${accountId} placing ${side} ${quantity} ${symbol} (${orderType}) order. LimitPrice: ${limitPrice || 'N/A'}, StopPrice: ${stopPrice || 'N/A'}, MarginRequired: $${marginRequired.toFixed(4)}`);
+
       // Freeze balance before placing order
       let marginFrozen = false;
-      const marginRequired = riskValidation.marginRequired || 0;
       if (marginRequired > 0) {
         await accountService.freezeBalance(accountId, marginRequired, `Order margin for ${symbol}`);
         marginFrozen = true;
+        logger.info(`[FLOW-DEBUG] [1-MARGIN_FREEZE] Account: ${accountId} successfully froze margin: $${marginRequired.toFixed(4)} for ${symbol} order`);
       }
 
       try {
@@ -89,6 +93,7 @@ function createOrderRoutes(orderService, riskService, matchingEngine, accountSer
         res.status(201).json(updatedOrder);
       } catch (placeError) {
         if (marginFrozen) {
+          logger.warn(`[FLOW-DEBUG] [1-MARGIN_REFUND] Account: ${accountId} refunding margin: $${marginRequired.toFixed(4)} due to order placement failure`);
           await accountService.unfreezeBalance(accountId, marginRequired, `Refund order margin for ${symbol} (failed)`);
         }
         throw placeError;

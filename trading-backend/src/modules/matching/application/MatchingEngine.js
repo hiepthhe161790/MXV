@@ -68,6 +68,8 @@ class MatchingEngine {
    */
   async submitOrder(order) {
     try {
+      logger.info(`[FLOW-DEBUG] [2-MATCHING_SUBMIT] Order ${order.id} (${order.side} ${order.quantity} ${order.symbol} ${order.orderType}) submitted to Matching Engine`);
+      
       this._initializeSymbolBook(order.symbol);
       
       const side = order.side === 'BUY' ? 'SELL' : 'BUY'; // Opposite side
@@ -96,6 +98,8 @@ class MatchingEngine {
             }
           }
           
+          logger.info(`[FLOW-DEBUG] [2-MATCHING_MATCHED] Matching order ${order.id} with booked order ${matchedOrder.id} for qty: ${fillQuantity} @ price: ${tradePrice}`);
+
           // Create trade
           const trade = await this._createTrade(order, matchedOrder, fillQuantity, tradePrice);
           
@@ -128,6 +132,7 @@ class MatchingEngine {
             orderType: 'LIMIT',
             limitPrice: mockPrice
           };
+          logger.info(`[FLOW-DEBUG] [2-MATCHING_LIQUIDITY] MARKET order ${order.id} automatically filled against simulated liquidity: ${remainingQuantity} @ price: ${mockPrice}`);
           const trade = await this._createTrade(order, mockOpposingOrder, remainingQuantity, mockPrice);
           await this._publishTradeEvents(trade, order, mockOpposingOrder, remainingQuantity, mockPrice);
           remainingQuantity = 0;
@@ -142,7 +147,7 @@ class MatchingEngine {
             createdAt: new Date(),
           });
           
-          logger.info(`Order added to book: ${order.id} - ${remainingQuantity}@${order.limitPrice}`);
+          logger.info(`[FLOW-DEBUG] [2-MATCHING_BOOKED] LIMIT order remaining qty: ${remainingQuantity} added to book for Order ${order.id} @ price: ${order.limitPrice}`);
         }
       }
 
@@ -296,7 +301,7 @@ class MatchingEngine {
         data: trade.toJSON ? trade.toJSON() : trade,
       });
 
-      logger.info(`Trade executed: ${quantity}@${price} - Buy: ${trade.buyOrderId}, Sell: ${trade.sellOrderId}`);
+      logger.info(`[FLOW-DEBUG] [2-TRADE_EXECUTED] Trade executed: ${trade.id} for Symbol: ${trade.symbol}, Qty: ${quantity} @ Price: ${price}. Buyer: ${trade.buyerAccountId} (Order ${trade.buyOrderId}), Seller: ${trade.sellerAccountId} (Order ${trade.sellOrderId})`);
     } catch (error) {
       logger.error('Error publishing trade events:', error);
     }

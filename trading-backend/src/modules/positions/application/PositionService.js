@@ -30,7 +30,7 @@ class PositionService {
         newPosition.markEventsAsCommitted();
         
         position = newPosition.toJSON();
-        logger.info(`Position created: ${symbol} ${side}`);
+        logger.info(`[FLOW-DEBUG] [4-POSITION_CREATED] New position created: ${position.id || position._id} for Account: ${accountId}, Symbol: ${symbol}, Side: ${side}`);
       }
       
       return position;
@@ -45,6 +45,8 @@ class PositionService {
    */
   async addTrade(accountId, symbol, side, tradeQuantity, tradePrice) {
     try {
+      logger.info(`[FLOW-DEBUG] [4-ADD_TRADE_START] Adding trade to position for Account: ${accountId}, Symbol: ${symbol}, Side: ${side}, TradeQty: ${tradeQuantity} @ Price: ${tradePrice}`);
+
       let positionData = await this.cache.get(`position:${accountId}:${symbol}`);
       if (!positionData) {
         positionData = await this.positionRepository.findByAccountAndSymbol(accountId, symbol);
@@ -66,7 +68,7 @@ class PositionService {
       await this.cache.set(`position:${accountId}:${symbol}`, position.toJSON());
       await this.cache.invalidatePattern(`positions:account:${accountId}`);
 
-      logger.info(`Trade added to position: ${symbol} ${side} ${tradeQuantity}@${tradePrice}`);
+      logger.info(`[FLOW-DEBUG] [4-ADD_TRADE_DONE] Trade added successfully. Position ${position.id} now has Qty: ${position.quantity}, EntryPrice: ${position.entryPrice}, MarginUsed: ${position.marginUsed}`);
       return position.toJSON();
     } catch (error) {
       logger.error('Error adding trade to position:', error);
@@ -117,6 +119,11 @@ class PositionService {
       if (!positionData) throw new Error('Position not found');
 
       const position = this.reconstructPosition(positionData);
+      
+      const marginReleased = position.marginUsed;
+
+      logger.info(`[FLOW-DEBUG] [5-CLOSE_POSITION_START] Closing position: Account: ${accountId}, Symbol: ${symbol}. Current Qty: ${position.quantity}, EntryPrice: ${position.entryPrice}, MarginUsed: ${position.marginUsed} at ClosePrice: ${closePrice}`);
+
       position.closePosition(closePrice);
 
       await this.positionRepository.save(position);
@@ -128,7 +135,7 @@ class PositionService {
       await this.cache.delete(`position:${accountId}:${symbol}`);
       await this.cache.invalidatePattern(`positions:account:${accountId}`);
 
-      logger.info(`Position closed: ${symbol} at ${closePrice}`);
+      logger.info(`[FLOW-DEBUG] [5-CLOSE_POSITION_DONE] Position ${position.id} closed. RealizedPnL: ${position.realizedPnL}, Margin released: ${marginReleased}`);
       return position.toJSON();
     } catch (error) {
       logger.error('Error closing position:', error);

@@ -110,7 +110,7 @@ class PriceFeedService {
       const newPrice = parseFloat((lastPrice * (1 + changePercent)).toFixed(appSymbol === 'NGF25' || appSymbol === 'HGZ24' ? 3 : 2));
       const dailyChange = parseFloat(((newPrice - basePrice) / basePrice * 100).toFixed(2));
 
-      logger.warn(`Failed to fetch Yahoo price for ${yahooSymbol} (${err.message}). Using simulated price fallback: $${newPrice} (${dailyChange}%)`);
+      //logger.warn(`Failed to fetch Yahoo price for ${yahooSymbol} (${err.message}). Using simulated price fallback: $${newPrice} (${dailyChange}%)`);
 
       return {
         price: newPrice,

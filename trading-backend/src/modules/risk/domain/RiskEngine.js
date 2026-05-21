@@ -1,6 +1,8 @@
 /**
  * Risk Validation Rules
  */
+const { roundToMoneyPrecision, calculateMarginRequired } = require('../../../shared/utils/currency');
+
 const RiskRules = {
   MAX_EXPOSURE_PER_ACCOUNT: 100000, // Maximum position exposure
   MIN_MARGIN_REQUIREMENT: 0.10, // 10% minimum margin
@@ -167,9 +169,7 @@ class RiskEngine {
     if (!resolvedPrice || resolvedPrice <= 0) {
       throw new Error(`Cannot calculate margin: missing valid price for ${order.symbol}`);
     }
-    const orderValue = order.quantity * resolvedPrice;
-    const margin = orderValue / RiskRules.MAX_LEVERAGE;
-    return margin;
+    return calculateMarginRequired(order.quantity, resolvedPrice, RiskRules.MAX_LEVERAGE);
   }
 
   /**
